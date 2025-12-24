@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 import numpy as np
+from torch.profiler import ProfilerActivity, profile, record_function
 
 from vllm import LLM, SamplingParams
 
@@ -15,8 +16,10 @@ def get_model(model_type: str) -> LLM:
         return LLM(
             model=target_model,
             dtype="bfloat16",
-            max_model_len=4096,
+            max_model_len=8192,
             max_num_seqs=32,
+            disable_log_stats=False,  # To get metrics
+            enable_prefix_caching=False,  # Clean Benchmarking
             gpu_memory_utilization=0.95,
         )
     elif model_type == "SpecDecode":
@@ -26,13 +29,13 @@ def get_model(model_type: str) -> LLM:
             max_num_seqs=32,
             gpu_memory_utilization=0.95,
             disable_log_stats=False,  # To get metrics
-            enable_prefix_caching=False,  # Clean Benchmarking
+            enable_prefix_caching=True,  # Clean Benchmarking
             speculative_config={
                 "model": draft_model,
                 "dtype": "bfloat16",
                 "method": "eagle3",
                 "draft_tensor_parallel_size": 1,  # Draft model must use TP=1
-                "num_speculative_tokens": 5,  # Number of speculative tokens
+                "num_speculative_tokens": 4,  # Number of speculative tokens
             },
         )
 
@@ -75,6 +78,20 @@ def print_single_request_metrics(metrics_dict: dict[str, Any]):
         f"\nTotal Time:  \
         {metrics_dict['wall_clock_time']:.4f} seconds"
     )
+    if metrics_dict["Efficiency"] is not None:
+        print(
+            f"\nSpec Decode Efficiency:  \
+        {metrics_dict['Efficiency']:.4f}"
+        )
+        print(
+            f"\nSpec Decode Draft tokens:  \
+        {metrics_dict['Draft tokens']:.4f}"
+        )
+        print(
+            f"\nSpec Decode Accepted tokens:  \
+        {metrics_dict['Accepted tokens']:.4f}"
+        )
+
     print("=" * 70)
 
 
@@ -102,7 +119,9 @@ def benchmark_single(
     return ret_val
 
 
-def benchmark_multi(benchmark_metrics: list[dict[str, Any]]):
+def benchmark_multi(
+    benchmark_metrics: list[dict[str, Any]], scheduler_stats: list | None = None
+):
     print("\n" + "=" * 70)
     print("AGGREGATED BENCHMARKING METRICS")
     print("=" * 70)
@@ -114,6 +133,27 @@ def benchmark_multi(benchmark_metrics: list[dict[str, Any]]):
     decode_times = [m["decode_time"] for m in benchmark_metrics]
     tokens_per_sec_list = [m["tokens_per_sec"] for m in benchmark_metrics]
     wall_clock_time_list = [m["wall_clock_time"] for m in benchmark_metrics]
+
+    # Spec Decoding Stats from Prometheus metrics (aggregated across all requests)
+    spec_decode_accepted_tokens = None
+    spec_decode_draft_tokens = None
+    spec_decode_num_drafts = None
+
+    if scheduler_stats:
+        for scheduler_stat in scheduler_stats:
+            if scheduler_stat.name == "vllm:spec_decode_num_accepted_tokens":
+                spec_decode_accepted_tokens = scheduler_stat.value
+            elif scheduler_stat.name == "vllm:spec_decode_num_draft_tokens":
+                spec_decode_draft_tokens = scheduler_stat.value
+            elif scheduler_stat.name == "vllm:spec_decode_num_drafts":
+                spec_decode_num_drafts = scheduler_stat.value
+
+    # Calculate efficiency as acceptance rate: accepted / draft tokens
+    spec_decode_efficiency = (
+        spec_decode_accepted_tokens / spec_decode_draft_tokens
+        if spec_decode_draft_tokens and spec_decode_draft_tokens > 0
+        else None
+    )
 
     # Calculate statistics
     print("\n--- Time To First Token (TTFT) ---")
@@ -178,6 +218,14 @@ def benchmark_multi(benchmark_metrics: list[dict[str, Any]]):
     print(f"  Median:              {np.median(wall_clock_time_list):.4f} seconds")
     print(f"  Std Dev:             {np.std(wall_clock_time_list):.4f} seconds")
 
+    # Print speculative decoding statistics if available
+    if spec_decode_accepted_tokens is not None:
+        print("\n--- Speculative Decoding Statistics ---")
+        print(f"Accepted Tokens: {spec_decode_accepted_tokens}")
+        print(f"\nDraft Tokens: {spec_decode_draft_tokens}")
+        print(f"\nEfficiency: {spec_decode_efficiency}")
+        print(f"\nNum Drafts: {spec_decode_num_drafts}")
+
     print("=" * 70)
 
 
@@ -186,30 +234,34 @@ def main():
 
     sampling_params = SamplingParams(
         temperature=0.7,
-        max_tokens=500,
+        max_tokens=128,
     )
+
+    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
 
     prompts = [
         "Winter is here. How to enjoy it?",
-        "How to become LLM inference performance optimization tzar?",
-        "The capital of France is",
-        "Explain quantum computing in simple terms:",
-        "Write a short story about a robot learning to paint.",
-        "What are the main causes of climate change?",
-        "Describe the process of photosynthesis.",
-        "How does machine learning differ from traditional programming?",
-        "Describe the water cycle.",
+        # "How to become LLM inference performance optimization tzar?",
+        # "The capital of France is",
+        # "Explain quantum computing in simple terms:",
+        # "Write a short story about a robot learning to paint.",
+        # "What are the main causes of climate change?",
+        # "Describe the process of photosynthesis.",
+        # "How does machine learning differ from traditional programming?",
+        # "Describe the water cycle.",
     ]
 
     all_metrics = []
 
     for i, prompt in enumerate(prompts):
-        # print(f'\n\nPrompt : {output.prompt}')
-        # print(f'Completion : {output.outputs[0].text}')
         if i > 0:
             llm.reset_prefix_cache(reset_running_requests=False)
         start_time = time.time()
-        outputs = llm.generate(prompt, sampling_params)
+        with (
+            profile(activities=activities, record_shapes=True, with_stack=True) as prof,
+            record_function("Model Decode"),
+        ):
+            outputs = llm.generate(prompt, sampling_params)
         end_time = time.time()
         for output in outputs:
             all_metrics.append(
@@ -222,7 +274,9 @@ def main():
                 )
             )
 
-    benchmark_multi(all_metrics)
+    benchmark_multi(all_metrics, llm.get_metrics())
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+    prof.export_chrome_trace("./log/decode_v1.json")
 
     time.sleep(1)
     del llm
