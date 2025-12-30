@@ -4,14 +4,28 @@ import time
 from typing import Any
 
 import numpy as np
-from torch.profiler import ProfilerActivity, profile, record_function
 
 from vllm import LLM, SamplingParams
+from vllm.v1.utils import record_function_or_nullcontext
 
 
-def get_model(model_type: str) -> LLM:
+def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
     target_model = "meta-llama/Llama-3.2-1B-Instruct"
     draft_model = "nm-testing/Llama3_2_1B_speculator.eagle3"
+
+    profiler_config = None
+    if enable_profiler:
+        import os
+
+        profiler_dir = os.path.abspath("./log/vllm_profile")
+        os.makedirs(profiler_dir, exist_ok=True)
+        profiler_config = {
+            "profiler": "torch",
+            "torch_profiler_dir": profiler_dir,
+            "torch_profiler_with_stack": False,
+            "torch_profiler_record_shapes": True,
+        }
+
     if model_type == "original":
         return LLM(
             model=target_model,
@@ -19,8 +33,9 @@ def get_model(model_type: str) -> LLM:
             max_model_len=8192,
             max_num_seqs=32,
             disable_log_stats=False,  # To get metrics
-            enable_prefix_caching=False,  # Clean Benchmarking
+            enable_prefix_caching=True,  # Clean Benchmarking
             gpu_memory_utilization=0.95,
+            profiler_config=profiler_config,
         )
     elif model_type == "SpecDecode":
         return LLM(
@@ -30,6 +45,7 @@ def get_model(model_type: str) -> LLM:
             gpu_memory_utilization=0.95,
             disable_log_stats=False,  # To get metrics
             enable_prefix_caching=True,  # Clean Benchmarking
+            enforce_eager=True,
             speculative_config={
                 "model": draft_model,
                 "dtype": "bfloat16",
@@ -37,6 +53,7 @@ def get_model(model_type: str) -> LLM:
                 "draft_tensor_parallel_size": 1,  # Draft model must use TP=1
                 "num_speculative_tokens": 4,  # Number of speculative tokens
             },
+            profiler_config=profiler_config,
         )
 
 
@@ -230,18 +247,17 @@ def benchmark_multi(
 
 
 def main():
-    llm = get_model("SpecDecode")
+    # Enable vLLM's built-in profiler which runs in worker processes
+    llm = get_model("SpecDecode", enable_profiler=True)
 
     sampling_params = SamplingParams(
         temperature=0.7,
-        max_tokens=128,
+        max_tokens=10,
     )
-
-    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
 
     prompts = [
         "Winter is here. How to enjoy it?",
-        # "How to become LLM inference performance optimization tzar?",
+        "How to become LLM inference performance optimization tzar?",
         # "The capital of France is",
         # "Explain quantum computing in simple terms:",
         # "Write a short story about a robot learning to paint.",
@@ -253,15 +269,16 @@ def main():
 
     all_metrics = []
 
+    # Start profiling - this enables profiling in worker processes
+
     for i, prompt in enumerate(prompts):
         if i > 0:
             llm.reset_prefix_cache(reset_running_requests=False)
         start_time = time.time()
-        with (
-            profile(activities=activities, record_shapes=True, with_stack=True) as prof,
-            record_function("Model Decode"),
-        ):
+        llm.start_profile()
+        with record_function_or_nullcontext("Entry All"):
             outputs = llm.generate(prompt, sampling_params)
+        llm.stop_profile()
         end_time = time.time()
         for output in outputs:
             all_metrics.append(
@@ -274,9 +291,16 @@ def main():
                 )
             )
 
+    # Stop profiling
+
     benchmark_multi(all_metrics, llm.get_metrics())
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    prof.export_chrome_trace("./log/decode_v1.json")
+
+    # Wait for profiler to finish writing traces
+    print("\nWaiting for profiler to finish writing traces...")
+    time.sleep(5)
+    print("Profiler traces saved to ./log/vllm_profile/")
+    print("Look for files named like: *-rank-0.*.pt.trace.json.gz")
+    print("You can view them in Chrome's chrome://tracing or Perfetto UI")
 
     time.sleep(1)
     del llm

@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import torch
 import torch.nn as nn
+from torch.autograd.profiler import record_function
 
 from vllm.logger import init_logger
 from vllm.triton_utils import tl, triton
@@ -139,16 +140,17 @@ class RejectionSampler(nn.Module):
         # Compute probability distribution from target logits.
         target_probs = target_logits.softmax(dim=-1, dtype=torch.float32)
 
-        output_token_ids = rejection_sample(
-            metadata.draft_token_ids,
-            metadata.num_draft_tokens,
-            metadata.max_spec_len,
-            metadata.cu_num_draft_tokens,
-            draft_probs,
-            target_probs,
-            bonus_token_ids,
-            sampling_metadata,
-        )
+        with record_function("Verification/Rejection Sampling"):
+            output_token_ids = rejection_sample(
+                metadata.draft_token_ids,
+                metadata.num_draft_tokens,
+                metadata.max_spec_len,
+                metadata.cu_num_draft_tokens,
+                draft_probs,
+                target_probs,
+                bonus_token_ids,
+                sampling_metadata,
+            )
 
         logprobs_tensors = None
         if sampling_metadata.max_num_logprobs is not None:

@@ -7,6 +7,7 @@ from importlib.util import find_spec
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.autograd.profiler import record_function
 
 from vllm.attention.backends.registry import AttentionBackendEnum
 from vllm.config import (
@@ -331,12 +332,13 @@ class EagleProposer:
             num_tokens_across_dp=num_tokens_across_dp,
             cudagraph_runtime_mode=cudagraph_runtime_mode,
         ):
-            ret_hidden_states = self.model(
-                input_ids=input_ids,
-                positions=self._get_positions(num_input_tokens),
-                hidden_states=self.hidden_states[:num_input_tokens],
-                inputs_embeds=inputs_embeds,
-            )
+            with record_function("Draft Token Generation"):
+                ret_hidden_states = self.model(
+                    input_ids=input_ids,
+                    positions=self._get_positions(num_input_tokens),
+                    hidden_states=self.hidden_states[:num_input_tokens],
+                    inputs_embeds=inputs_embeds,
+                )
             if self.method == "mtp":
                 last_hidden_states = ret_hidden_states
                 hidden_states = last_hidden_states
