@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import os
 import time
 from typing import Any
 
@@ -15,8 +16,6 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
 
     profiler_config = None
     if enable_profiler:
-        import os
-
         profiler_dir = os.path.abspath("./log/vllm_profile")
         os.makedirs(profiler_dir, exist_ok=True)
         profiler_config = {
