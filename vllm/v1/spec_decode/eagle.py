@@ -332,7 +332,7 @@ class EagleProposer:
             num_tokens_across_dp=num_tokens_across_dp,
             cudagraph_runtime_mode=cudagraph_runtime_mode,
         ):
-            with record_function("Draft Token Generation"):
+            with record_function("Draft Token Generation First Fwd Pass"):
                 ret_hidden_states = self.model(
                     input_ids=input_ids,
                     positions=self._get_positions(num_input_tokens),
