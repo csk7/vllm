@@ -274,6 +274,7 @@ def main():
     os.environ["VLLM_TORCH_PROFILER_WITH_PROFILE_MEMORY"] = "0"
     os.environ["VLLM_TORCH_PROFILER_WITH_STACK"] = "0"
     os.environ["VLLM_TORCH_PROFILER_WITH_FLOPS"] = "0"
+    os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     # Enable vLLM's built-in profiler which runs in worker processes
     llm = get_model("SpecDecode", enable_profiler=True)
 
