@@ -11,10 +11,10 @@ from vllm.v1.utils import record_function_or_nullcontext
 
 
 def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
-    #target_model = "meta-llama/Llama-3.1-8B-Instruct"
-    #draft_model = "nm-testing/Llama3_2_1B_speculator.eagle3"
-    target_model = "Qwen/Qwen3-8B"
-    draft_model = "RedHatAI/Qwen3-8B-speculator.eagle3"
+    target_model = "meta-llama/Llama-3.2-1B-Instruct"
+    draft_model = "nm-testing/Llama3_2_1B_speculator.eagle3"
+    # target_model = "Qwen/Qwen3-8B"
+    # draft_model = "RedHatAI/Qwen3-8B-speculator.eagle3"
 
     profiler_config = None
     if enable_profiler:
@@ -32,7 +32,7 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
             model=target_model,
             dtype="bfloat16",
             max_model_len=8192,
-            max_num_seqs=1000,
+            max_num_seqs=32,
             disable_log_stats=False,  # To get metrics
             enable_prefix_caching=True,  # Clean Benchmarking
             gpu_memory_utilization=0.95,
@@ -41,8 +41,9 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
     elif model_type == "SpecDecode":
         return LLM(
             model=target_model,
+            dtype="bfloat16",
             max_model_len=8192,
-            max_num_seqs=128,
+            max_num_seqs=32,
             gpu_memory_utilization=0.95,
             disable_log_stats=False,  # To get metrics
             enable_prefix_caching=True,  # Clean Benchmarking
@@ -60,6 +61,7 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
 
 def warmup(llm: LLM, prompts: list[str], sampling_params, warmup_iters):
     print("WARM UP START")
+    assert warmup_iters <= len(prompts)
     for i in range(warmup_iters):
         _ = llm.generate(prompts[i], sampling_params)
     print("WARM UP DONE")
@@ -243,18 +245,25 @@ def benchmark_multi(
         print(f"\nDraft Tokens: {spec_decode_draft_tokens}")
         print(f"\nEfficiency: {spec_decode_efficiency}")
         print(f"\nNum Drafts: {spec_decode_num_drafts}")
-        
+
         # Calculate acceptance length per draft step
         if spec_decode_num_drafts and spec_decode_num_drafts > 0:
             acceptance_length = spec_decode_accepted_tokens / spec_decode_num_drafts
-            print(f"\nAcceptance Length (avg tokens per draft step): {acceptance_length:.3f}")
-            print(f"Expected for Eagle3: ~2.811 (with temp=0.0, top_p=1.0)")
+            print(
+                f"\nAcceptance Length (avg tokens per draft step): \
+                {acceptance_length:.3f}"
+            )
+            print("Expected for Eagle3: ~2.811 (with temp=0.0, top_p=1.0)")
             if acceptance_length < 2.0:
-                print("⚠️  WARNING: Acceptance length is significantly lower than expected!")
-                print("   This suggests the draft model may not be well-aligned with the target model.")
-                print("   Consider trying: 'AngelSlim/Qwen3-8B_eagle3' (used in vLLM tests)")
-                print(f"   Current: {acceptance_length:.3f} tokens/step (expected ~2.811)")
-                print(f"   Efficiency: {spec_decode_efficiency*100:.1f}% (ideal: >90%)")
+                print("⚠️  WARNING: Acceptance length is lower than expected!")
+                print(
+                    f"Current: {acceptance_length:.3f} \
+                    tokens/step (expected ~2.811)"
+                )
+                print(
+                    f"Efficiency: {spec_decode_efficiency * 100:.1f}% \
+                    (ideal: >90%)"
+                )
 
     print("=" * 70)
 
@@ -270,22 +279,30 @@ def main():
 
     sampling_params = SamplingParams(
         temperature=0.0,
-        top_p=1.0,
+        top_p=0.8,
         max_tokens=150,
     )
 
     prompts = [
-        "Explain the concept of machine learning in simple terms. Cover the basic idea, \
-            how it differs from traditional programming, and give a practical example.",
-        "Describe the process of photosynthesis. Include the key steps, what inputs are needed, and what outputs are produced.",
-        "Write a brief explanation of how neural networks work. Discuss neurons, layers, and the learning process.",
-        "Explain the difference between supervised and unsupervised learning. Provide examples of each type.",
-        "Describe the water cycle. Include all the major stages and how water moves through the system.",
-        "What are the main advantages and disadvantages of renewable energy sources? Discuss at least three different types.",
-        "Explain how a compiler works. Describe the main stages from source code to executable program.",
-        "What is the difference between CPU and GPU? Explain their respective strengths and use cases.",
+        "Explain the concept of machine learning in simple terms. \
+            Cover the basic idea, \
+            how it differs from traditional programming, \
+            and give a practical example.",
+        "Describe the process of photosynthesis. Include the key steps, \
+            what inputs are needed, and what outputs are produced.",
+        "Write a brief explanation of how neural networks work. \
+            Discuss neurons, layers, and the learning process.",
+        "Explain the difference between supervised and unsupervised learning. \
+            Provide examples of each type.",
+        "Describe the water cycle. Include all the major stages and \
+            how water moves through the system.",
+        "What are the main advantages and disadvantages of renewable \
+            energy sources? Discuss at least three different types.",
+        "Explain how a compiler works. Describe the main stages \
+            from source code to executable program.",
+        "What is the difference between CPU and GPU? Explain \
+            their respective strengths and use cases.",
     ]
-
 
     all_metrics = []
 
@@ -295,12 +312,12 @@ def main():
         if i > 0:
             llm.reset_prefix_cache(reset_running_requests=False)
         start_time = time.time()
-        
-        if(i==1):
+
+        if i == 2:
             llm.start_profile()
         with record_function_or_nullcontext("Entry All"):
             outputs = llm.generate(prompt, sampling_params)
-        if(i==2):
+        if i == 2:
             llm.stop_profile()
         end_time = time.time()
         for output in outputs:
