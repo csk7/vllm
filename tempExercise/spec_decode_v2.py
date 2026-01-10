@@ -178,51 +178,51 @@ def benchmark_multi(
     # Calculate statistics
     print("\n--- Time To First Token (TTFT) ---")
     print(
-        f"Mean:{np.mean(ttfts):.4f} seconds \
+        f"Mean:    \
                 {np.mean(ttfts) * 1000:.2f} ms"
     )
     print(
-        f"Median:{np.median(ttfts):.4f} seconds \
+        f"Median:  \
                 {np.median(ttfts) * 1000:.2f} ms"
     )
     print(
-        f"Std Dev:{np.std(ttfts):.4f} seconds \
+        f"Std Dev: \
                 {np.std(ttfts) * 1000:.2f} ms"
     )
     print(
-        f"Min:{np.min(ttfts):.4f} seconds \
+        f"Min:     \
                 {np.min(ttfts) * 1000:.2f} ms"
     )
     print(
-        f"Max:{np.max(ttfts):.4f} seconds \
+        f"Max:     \
                 {np.max(ttfts) * 1000:.2f} ms"
     )
 
     print("\n--- Prefill Time ---")
     print(
-        f"Mean:{np.mean(prefill_times):.4f} seconds \
+        f"Mean:    \
                 {np.mean(prefill_times) * 1000:.2f} ms"
     )
     print(
-        f"Median:{np.median(prefill_times):.4f} seconds \
+        f"Median:  \
                 {np.median(prefill_times) * 1000:.2f} ms"
     )
     print(
-        f"Std Dev:{np.std(prefill_times):.4f} seconds \
+        f"Std Dev: \
                 {np.std(prefill_times) * 1000:.2f} ms"
     )
 
     print("\n--- Decode Time ---")
     print(
-        f"Mean:{np.mean(decode_times):.4f} seconds \
+        f"Mean:     \
                 {np.mean(decode_times) * 1000:.2f} ms"
     )
     print(
-        f"Median:{np.median(decode_times):.4f} seconds \
+        f"Median:   \
                 {np.median(decode_times) * 1000:.2f} ms"
     )
     print(
-        f"Std Dev:{np.std(decode_times):.4f} seconds \
+        f"Std Dev:  \
                 {np.std(decode_times) * 1000:.2f} ms"
     )
 
@@ -241,10 +241,10 @@ def benchmark_multi(
     # Print speculative decoding statistics if available
     if spec_decode_accepted_tokens is not None:
         print("\n--- Speculative Decoding Statistics ---")
-        print(f"Accepted Tokens: {spec_decode_accepted_tokens}")
-        print(f"\nDraft Tokens: {spec_decode_draft_tokens}")
-        print(f"\nEfficiency: {spec_decode_efficiency}")
-        print(f"\nNum Drafts: {spec_decode_num_drafts}")
+        print(f"\nAccepted Tokens: {spec_decode_accepted_tokens}")
+        print(f"\nDraft Tokens:    {spec_decode_draft_tokens}")
+        print(f"\nEfficiency:      {spec_decode_efficiency}")
+        print(f"\nNum Drafts:      {spec_decode_num_drafts}")
 
         # Calculate acceptance length per draft step
         if spec_decode_num_drafts and spec_decode_num_drafts > 0:
@@ -307,6 +307,7 @@ def main():
     all_metrics = []
 
     # Start profiling - this enables profiling in worker processes
+    warmup(llm=llm, prompts=prompts, sampling_params=sampling_params, warmup_iters=2)
 
     for i, prompt in enumerate(prompts):
         if i > 0:
