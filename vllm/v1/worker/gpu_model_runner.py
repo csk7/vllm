@@ -3256,8 +3256,18 @@ class GPUModelRunner(
             # Mark KV scales as calculated after the first forward pass
             self.calculate_kv_scales = False
 
+        # Determine if this is prefill or decode phase
+        # Prefill: num_computed_tokens < num_prompt_tokens for at least one request
+        # Decode: all requests have num_computed_tokens >= num_prompt_tokens
+        is_prefill_phase = False
+        if num_reqs > 0:
+            num_computed_tokens = self.input_batch.num_computed_tokens_cpu[:num_reqs]
+            num_prompt_tokens = self.input_batch.num_prompt_tokens[:num_reqs]
+            is_prefill_phase = np.any(num_computed_tokens < num_prompt_tokens)
+
         # Run the model.
         # Use persistent buffers for CUDA graphs.
+        phase_marker = "Prefill" if is_prefill_phase else "Decode"
         with (
             set_forward_context(
                 attn_metadata,
@@ -3273,7 +3283,7 @@ class GPUModelRunner(
         ):
             from torch.autograd.profiler import record_function
 
-            with record_function("Target Model Generation"):
+            with record_function(f"Target Model FW Pass : {phase_marker}"):
                 model_output = self._model_forward(
                     input_ids=input_ids,
                     positions=positions,
@@ -3657,114 +3667,132 @@ class GPUModelRunner(
             )
         elif spec_config.use_eagle():
             assert isinstance(self.drafter, EagleProposer)
+            from torch.autograd.profiler import record_function
 
-            if spec_config.disable_padded_drafter_batch:
-                # When padded-batch is disabled, the sampled_token_ids should be
-                # the cpu-side list[list[int]] of valid sampled tokens for each
-                # request, with invalid requests having empty lists.
-                assert isinstance(sampled_token_ids, list), (
-                    "sampled_token_ids should be a python list when"
-                    "padded-batch is disabled."
-                )
-                next_token_ids = self.drafter.prepare_next_token_ids_cpu(
-                    sampled_token_ids,
-                    self.requests,
-                    self.input_batch,
-                    scheduler_output.num_scheduled_tokens,
-                )
-            else:
-                # When using padded-batch, the sampled_token_ids should be
-                # the gpu tensor of sampled tokens for each request, of shape
-                # (num_reqs, num_spec_tokens + 1) with rejected tokens having
-                # value -1.
-                assert isinstance(sampled_token_ids, torch.Tensor), (
-                    "sampled_token_ids should be a torch.Tensor when"
-                    "padded-batch is enabled."
-                )
-                next_token_ids, valid_sampled_tokens_count = (
-                    self.drafter.prepare_next_token_ids_padded(
-                        common_attn_metadata,
+            with record_function("Draft previous clean tasks"):
+                if spec_config.disable_padded_drafter_batch:
+                    # When padded-batch is disabled, the sampled_token_ids should be
+                    # the cpu-side list[list[int]] of valid sampled tokens for each
+                    # request, with invalid requests having empty lists.
+                    assert isinstance(sampled_token_ids, list), (
+                        "sampled_token_ids should be a python list when"
+                        "padded-batch is disabled."
+                    )
+                    next_token_ids = self.drafter.prepare_next_token_ids_cpu(
                         sampled_token_ids,
                         self.requests,
                         self.input_batch,
-                        self.discard_request_mask.gpu,
-                    )
-                )
-                self._copy_valid_sampled_token_count(
-                    next_token_ids, valid_sampled_tokens_count
-                )
-
-            num_rejected_tokens_gpu = None
-            if spec_decode_metadata is None:
-                token_indices_to_sample = None
-                # input_ids can be None for multimodal models.
-                target_token_ids = self.input_ids.gpu[:num_scheduled_tokens]
-                target_positions = self._get_positions(num_scheduled_tokens)
-                if self.use_aux_hidden_state_outputs:
-                    assert aux_hidden_states is not None
-                    target_hidden_states = torch.cat(
-                        [h[:num_scheduled_tokens] for h in aux_hidden_states], dim=-1
+                        scheduler_output.num_scheduled_tokens,
                     )
                 else:
-                    target_hidden_states = hidden_states[:num_scheduled_tokens]
-            else:
-                if spec_config.disable_padded_drafter_batch:
+                    # When using padded-batch, the sampled_token_ids should be
+                    # the gpu tensor of sampled tokens for each request, of shape
+                    # (num_reqs, num_spec_tokens + 1) with rejected tokens having
+                    # value -1.
+                    assert isinstance(sampled_token_ids, torch.Tensor), (
+                        "sampled_token_ids should be a torch.Tensor when"
+                        "padded-batch is enabled."
+                    )
+                    with record_function(
+                        "Get last target model valid tokens from metadata to buffer"
+                    ):
+                        next_token_ids, valid_sampled_tokens_count = (
+                            self.drafter.prepare_next_token_ids_padded(
+                                common_attn_metadata,
+                                sampled_token_ids,
+                                self.requests,
+                                self.input_batch,
+                                self.discard_request_mask.gpu,
+                            )
+                        )
+
+                    with record_function("Copy valid token counter to CPU"):
+                        self._copy_valid_sampled_token_count(
+                            next_token_ids, valid_sampled_tokens_count
+                        )
+
+                num_rejected_tokens_gpu = None
+                if spec_decode_metadata is None:
                     token_indices_to_sample = None
-                    common_attn_metadata, token_indices = self.drafter.prepare_inputs(
-                        common_attn_metadata,
-                        sampled_token_ids,
-                        spec_decode_metadata.num_draft_tokens,
-                    )
-                    target_token_ids = self.input_ids.gpu[token_indices]
-                    target_positions = self._get_positions(token_indices)
-                    if self.use_aux_hidden_state_outputs:
-                        assert aux_hidden_states is not None
-                        target_hidden_states = torch.cat(
-                            [h[token_indices] for h in aux_hidden_states], dim=-1
-                        )
-                    else:
-                        target_hidden_states = hidden_states[token_indices]
+                    # input_ids can be None for multimodal models.
+                    with record_function(
+                        "Prepare all target outputs until now, Cat hidden states(F)"
+                    ):
+                        target_token_ids = self.input_ids.gpu[:num_scheduled_tokens]
+                        target_positions = self._get_positions(num_scheduled_tokens)
+                        if self.use_aux_hidden_state_outputs:
+                            assert aux_hidden_states is not None
+                            target_hidden_states = torch.cat(
+                                [h[:num_scheduled_tokens] for h in aux_hidden_states],
+                                dim=-1,
+                            )
+                        else:
+                            target_hidden_states = hidden_states[:num_scheduled_tokens]
                 else:
-                    (
-                        common_attn_metadata,
-                        token_indices_to_sample,
-                        num_rejected_tokens_gpu,
-                    ) = self.drafter.prepare_inputs_padded(
-                        common_attn_metadata,
-                        spec_decode_metadata,
-                        valid_sampled_tokens_count,
-                    )
-                    total_num_tokens = common_attn_metadata.num_actual_tokens
-                    # When padding the batch, token_indices is just a range
-                    target_token_ids = self.input_ids.gpu[:total_num_tokens]
-                    target_positions = self._get_positions(total_num_tokens)
-                    if self.use_aux_hidden_state_outputs:
-                        assert aux_hidden_states is not None
-                        target_hidden_states = torch.cat(
-                            [h[:total_num_tokens] for h in aux_hidden_states], dim=-1
+                    if spec_config.disable_padded_drafter_batch:
+                        token_indices_to_sample = None
+                        common_attn_metadata, token_indices = (
+                            self.drafter.prepare_inputs(
+                                common_attn_metadata,
+                                sampled_token_ids,
+                                spec_decode_metadata.num_draft_tokens,
+                            )
                         )
+                        target_token_ids = self.input_ids.gpu[token_indices]
+                        target_positions = self._get_positions(token_indices)
+                        if self.use_aux_hidden_state_outputs:
+                            assert aux_hidden_states is not None
+                            target_hidden_states = torch.cat(
+                                [h[token_indices] for h in aux_hidden_states], dim=-1
+                            )
+                        else:
+                            target_hidden_states = hidden_states[token_indices]
                     else:
-                        target_hidden_states = hidden_states[:total_num_tokens]
+                        with record_function(
+                            "Prepare all target outputs until now, Cat hidden states(S)"
+                        ):
+                            (
+                                common_attn_metadata,
+                                token_indices_to_sample,
+                                num_rejected_tokens_gpu,
+                            ) = self.drafter.prepare_inputs_padded(
+                                common_attn_metadata,
+                                spec_decode_metadata,
+                                valid_sampled_tokens_count,
+                            )
+                            total_num_tokens = common_attn_metadata.num_actual_tokens
+                            # When padding the batch, token_indices is just a range
+                            target_token_ids = self.input_ids.gpu[:total_num_tokens]
+                            target_positions = self._get_positions(total_num_tokens)
+                            if self.use_aux_hidden_state_outputs:
+                                assert aux_hidden_states is not None
+                                target_hidden_states = torch.cat(
+                                    [h[:total_num_tokens] for h in aux_hidden_states],
+                                    dim=-1,
+                                )
+                            else:
+                                target_hidden_states = hidden_states[:total_num_tokens]
 
-            if self.supports_mm_inputs:
-                mm_embed_inputs = self._gather_mm_embeddings(
-                    scheduler_output,
-                    shift_computed_tokens=1,
+                if self.supports_mm_inputs:
+                    mm_embed_inputs = self._gather_mm_embeddings(
+                        scheduler_output,
+                        shift_computed_tokens=1,
+                    )
+                else:
+                    mm_embed_inputs = None
+
+            with record_function("draft proposal"):
+                draft_token_ids = self.drafter.propose(
+                    target_token_ids=target_token_ids,
+                    target_positions=target_positions,
+                    target_hidden_states=target_hidden_states,
+                    next_token_ids=next_token_ids,
+                    last_token_indices=token_indices_to_sample,
+                    sampling_metadata=sampling_metadata,
+                    common_attn_metadata=common_attn_metadata,
+                    mm_embed_inputs=mm_embed_inputs,
+                    num_rejected_tokens_gpu=num_rejected_tokens_gpu,
                 )
-            else:
-                mm_embed_inputs = None
-
-            draft_token_ids = self.drafter.propose(
-                target_token_ids=target_token_ids,
-                target_positions=target_positions,
-                target_hidden_states=target_hidden_states,
-                next_token_ids=next_token_ids,
-                last_token_indices=token_indices_to_sample,
-                sampling_metadata=sampling_metadata,
-                common_attn_metadata=common_attn_metadata,
-                mm_embed_inputs=mm_embed_inputs,
-                num_rejected_tokens_gpu=num_rejected_tokens_gpu,
-            )
 
         return draft_token_ids
 

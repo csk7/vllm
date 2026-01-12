@@ -15,6 +15,7 @@ from typing import Any, TypeVar, cast
 
 import msgspec
 import zmq
+from torch.autograd.profiler import record_function
 
 from vllm.config import ParallelConfig, VllmConfig
 from vllm.distributed import stateless_destroy_torch_distributed_process_group
@@ -379,15 +380,17 @@ class EngineCore:
         if not self.scheduler.has_requests():
             return {}, False
         scheduler_output = self.scheduler.schedule()
-        future = self.model_executor.execute_model(scheduler_output, non_block=True)
-        grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
-        with (
-            self.log_error_detail(scheduler_output),
-            self.log_iteration_details(scheduler_output),
-        ):
-            model_output = future.result()
-            if model_output is None:
-                model_output = self.model_executor.sample_tokens(grammar_output)
+        with record_function("Model Pre-IT-Post"):
+            future = self.model_executor.execute_model(scheduler_output, non_block=True)
+        with record_function("Model Pre-IT-Post"):
+            grammar_output = self.scheduler.get_grammar_bitmask(scheduler_output)
+            with (
+                self.log_error_detail(scheduler_output),
+                self.log_iteration_details(scheduler_output),
+            ):
+                model_output = future.result()
+                if model_output is None:
+                    model_output = self.model_executor.sample_tokens(grammar_output)
 
         # Before processing the model output, process any aborts that happened
         # during the model execution.

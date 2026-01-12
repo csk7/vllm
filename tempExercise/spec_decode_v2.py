@@ -5,16 +5,28 @@ import time
 from typing import Any
 
 import numpy as np
+import torch
 
 from vllm import LLM, SamplingParams
-from vllm.v1.utils import record_function_or_nullcontext
+
+MODE = "profiling"  # "benchmarking"
+RUN_LOC = "local"  # "server"
+DEBUG = False
+
+os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "1"
+if not DEBUG:
+    os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "1"
+else:
+    os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 
 def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
-    target_model = "meta-llama/Llama-3.2-1B-Instruct"
-    draft_model = "nm-testing/Llama3_2_1B_speculator.eagle3"
-    # target_model = "Qwen/Qwen3-8B"
-    # draft_model = "RedHatAI/Qwen3-8B-speculator.eagle3"
+    if RUN_LOC == "local":
+        target_model = "meta-llama/Llama-3.2-1B-Instruct"
+        draft_model = "nm-testing/Llama3_2_1B_speculator.eagle3"
+    elif RUN_LOC == "server":
+        target_model = "Qwen/Qwen3-8B"
+        draft_model = "RedHatAI/Qwen3-8B-speculator.eagle3"
 
     profiler_config = None
     if enable_profiler:
@@ -25,6 +37,8 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
             "torch_profiler_dir": profiler_dir,
             "torch_profiler_with_stack": False,
             "torch_profiler_record_shapes": True,
+            "torch_profiler_with_memory": False,
+            "torch_profiler_dump_cuda_time_total": True,
         }
 
     if model_type == "original":
@@ -46,7 +60,7 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
             max_num_seqs=32,
             gpu_memory_utilization=0.95,
             disable_log_stats=False,  # To get metrics
-            enable_prefix_caching=True,  # Clean Benchmarking
+            enable_prefix_caching=False,  # Clean Benchmarking
             enforce_eager=True,
             speculative_config={
                 "model": draft_model,
@@ -269,19 +283,20 @@ def benchmark_multi(
 
 
 def main():
-    os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "0"
-    os.environ["VLLM_TORCH_PROFILER_RECORD_SHAPES"] = "0"
-    os.environ["VLLM_TORCH_PROFILER_WITH_PROFILE_MEMORY"] = "0"
-    os.environ["VLLM_TORCH_PROFILER_WITH_STACK"] = "0"
-    os.environ["VLLM_TORCH_PROFILER_WITH_FLOPS"] = "0"
-    os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     # Enable vLLM's built-in profiler which runs in worker processes
     llm = get_model("SpecDecode", enable_profiler=True)
+
+    if MODE == "profiling":
+        max_tokens = 10
+    elif MODE == "benchmarking":
+        max_tokens = 128
+    else:
+        raise NotImplementedError("Check MODE")
 
     sampling_params = SamplingParams(
         temperature=0.0,
         top_p=0.8,
-        max_tokens=150,
+        max_tokens=max_tokens,
     )
 
     prompts = [
@@ -317,11 +332,11 @@ def main():
 
         if i == 2:
             llm.start_profile()
-        with record_function_or_nullcontext("Entry All"):
-            outputs = llm.generate(prompt, sampling_params)
+        outputs = llm.generate(prompt, sampling_params)
         if i == 2:
             llm.stop_profile()
         end_time = time.time()
+
         for output in outputs:
             all_metrics.append(
                 benchmark_single(
@@ -341,11 +356,12 @@ def main():
     print("\nWaiting for profiler to finish writing traces...")
     time.sleep(5)
     print("Profiler traces saved to ./log/vllm_profile/")
-    print("Look for files named like: *-rank-0.*.pt.trace.json.gz")
-    print("You can view them in Chrome's chrome://tracing or Perfetto UI")
 
     time.sleep(1)
     del llm
+
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
