@@ -230,6 +230,9 @@ ep_kernels_workspace/
 
 #logs
 log/*
+tempExercise/log/*
+*.nsys-rep
+*.pt.trace.json.gz
 
 # Generated gRPC protobuf files (compiled at build time from vllm_engine.proto)
 vllm/grpc/vllm_engine_pb2.py
