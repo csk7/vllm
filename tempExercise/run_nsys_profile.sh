@@ -13,6 +13,7 @@ nsys profile \
     --trace-fork-before-exec=true \
     --cuda-graph-trace=node \
     --output=nsys_profile \
+    --force-overwrite true \
     python spec_decode_v2_nsys.py
 
 echo ""

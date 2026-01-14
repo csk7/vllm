@@ -232,6 +232,7 @@ ep_kernels_workspace/
 log/*
 tempExercise/log/*
 *.nsys-rep
+*.sqlite
 *.pt.trace.json.gz
 
 # Generated gRPC protobuf files (compiled at build time from vllm_engine.proto)

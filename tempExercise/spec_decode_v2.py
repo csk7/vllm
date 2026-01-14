@@ -331,11 +331,20 @@ def main():
         start_time = time.time()
 
         if i == 2:
+            # Start profiling - ensure CUDA is ready
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             llm.start_profile()
+
         outputs = llm.generate(prompt, sampling_params)
-        torch.cuda.synchronize()
+
         if i == 2:
+            # Synchronize GPU before stopping profiler to
+            #       ensure all operations are captured
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             llm.stop_profile()
+
         end_time = time.time()
 
         for output in outputs:
