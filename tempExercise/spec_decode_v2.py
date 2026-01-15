@@ -11,7 +11,9 @@ from vllm import LLM, SamplingParams
 
 MODE = "profiling"  # "benchmarking"
 RUN_LOC = "local"  # "server"
-DEBUG = False
+DEBUG = True
+with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]):
+    torch.cuda.empty_cache()
 
 os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "1"
 if not DEBUG:

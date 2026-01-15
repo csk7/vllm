@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from abc import ABC, abstractmethod
-from contextlib import contextmanager, nullcontext, suppress
+from contextlib import nullcontext
 from typing import Literal
 
 import torch
@@ -156,7 +156,6 @@ class TorchProfilerWrapper(WorkerProfiler):
 
         self.local_rank = local_rank
         self.profiler_config = profiler_config
-        self.activities = activities  # Store for use in _stop()
         torch_profiler_trace_dir = profiler_config.torch_profiler_dir
         if local_rank in (None, 0):
             logger.info_once(
@@ -174,41 +173,17 @@ class TorchProfilerWrapper(WorkerProfiler):
             )
 
         self.dump_cpu_time_total = "CPU" in activities and len(activities) == 1
-        self.torch_profiler_trace_dir = torch_profiler_trace_dir
-        self.worker_name = worker_name
-        self.use_gzip = profiler_config.torch_profiler_use_gzip
-        self.accumulated_traces = []
-
-        def accumulate_trace_handler(prof):
-            """Accumulate trace data from each step for merging."""
-            import json
-            import os
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(
-                mode="w", delete=False, suffix=".json"
-            ) as f:
-                temp_file = f.name
-            prof.export_chrome_trace(temp_file)
-            try:
-                with open(temp_file) as f:
-                    self.accumulated_traces.append(json.load(f))
-            except Exception as e:
-                logger.debug("Could not read trace: %s", e)
-            finally:
-                with suppress(Exception):
-                    os.remove(temp_file)
-
-        # Schedule is required for GPU profiling to work
-        # active=1 ensures GPU events are captured for each step
         self.profiler = torch.profiler.profile(
             activities=[TorchProfilerActivityMap[activity] for activity in activities],
-            schedule=torch.profiler.schedule(wait=0, warmup=0, active=1, repeat=0),
             record_shapes=profiler_config.torch_profiler_record_shapes,
             profile_memory=profiler_config.torch_profiler_with_memory,
             with_stack=profiler_config.torch_profiler_with_stack,
             with_flops=profiler_config.torch_profiler_with_flops,
-            on_trace_ready=accumulate_trace_handler,
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                torch_profiler_trace_dir,
+                worker_name=worker_name,
+                use_gzip=profiler_config.torch_profiler_use_gzip,
+            ),
         )
 
     @override
@@ -216,94 +191,8 @@ class TorchProfilerWrapper(WorkerProfiler):
         self.profiler.start()
 
     @override
-    def step(self) -> None:
-        """Advance the torch profiler schedule to enable GPU event recording."""
-        super().step()
-        if self._running:
-            self.profiler.step()
-
-    @override
     def _stop(self) -> None:
-        if "CUDA" in self.activities:
-            torch.cuda.synchronize()
         self.profiler.stop()
-
-        # Merge all accumulated traces into a single file with continuous timestamps
-        try:
-            import gzip
-            import json
-            import os
-            import shutil
-
-            trace_file = os.path.join(
-                self.torch_profiler_trace_dir, f"{self.worker_name}.pt.trace.json"
-            )
-
-            if self.accumulated_traces:
-                merged_trace = {
-                    "traceEvents": [],
-                    "displayTimeUnit": "ms",
-                    "otherData": {},
-                }
-                current_max_time = None
-
-                for trace in self.accumulated_traces:
-                    if "traceEvents" in trace and trace["traceEvents"]:
-                        trace_min_time = min(
-                            (e.get("ts") for e in trace["traceEvents"] if "ts" in e),
-                            default=None,
-                        )
-                        trace_max_time = max(
-                            (e.get("ts") for e in trace["traceEvents"] if "ts" in e),
-                            default=None,
-                        )
-
-                        if trace_min_time is not None:
-                            time_offset = (
-                                0
-                                if current_max_time is None
-                                else current_max_time - trace_min_time
-                            )
-                            current_max_time = (
-                                trace_max_time + time_offset
-                                if trace_max_time
-                                else current_max_time
-                            )
-
-                            for event in trace["traceEvents"]:
-                                adjusted_event = event.copy()
-                                if "ts" in adjusted_event:
-                                    adjusted_event["ts"] += time_offset
-                                merged_trace["traceEvents"].append(adjusted_event)
-                        else:
-                            merged_trace["traceEvents"].extend(trace["traceEvents"])
-
-                    if "otherData" in trace:
-                        merged_trace["otherData"].update(trace["otherData"])
-
-                merged_trace["traceEvents"].sort(key=lambda x: x.get("ts", 0))
-
-                with open(trace_file, "w") as f:
-                    json.dump(merged_trace, f)
-
-                if self.use_gzip:
-                    with (
-                        open(trace_file, "rb") as f_in,
-                        gzip.open(trace_file + ".gz", "wb") as f_out,
-                    ):
-                        shutil.copyfileobj(f_in, f_out)
-                    os.remove(trace_file)
-            else:
-                self.profiler.export_chrome_trace(trace_file)
-                if self.use_gzip:
-                    with (
-                        open(trace_file, "rb") as f_in,
-                        gzip.open(trace_file + ".gz", "wb") as f_out,
-                    ):
-                        shutil.copyfileobj(f_in, f_out)
-                    os.remove(trace_file)
-        except Exception as e:
-            logger.warning("Could not export trace: %s", e)
 
         profiler_config = self.profiler_config
         rank = self.local_rank
@@ -328,14 +217,7 @@ class TorchProfilerWrapper(WorkerProfiler):
 
     @override
     def annotate_context_manager(self, name: str):
-        @contextmanager
-        def sync_context():
-            with torch.profiler.record_function(name):
-                yield
-            if "CUDA" in self.activities:
-                torch.cuda.synchronize()
-
-        return sync_context()
+        return torch.profiler.record_function(name)
 
 
 class CudaProfilerWrapper(WorkerProfiler):

@@ -4,7 +4,7 @@ import os
 
 import torch
 import torch.nn as nn
-from torch.profiler import ProfilerActivity, schedule
+from torch.profiler import ProfilerActivity
 from torch.profiler import profile as torch_profile
 from torch.profiler import record_function as torch_record_function
 
@@ -88,7 +88,7 @@ def main():
 
     with torch_profile(
         activities=activities,
-        schedule=schedule(wait=0, warmup=0, active=1, repeat=1),
+        # schedule=schedule(wait=0, warmup=0, active=1, repeat=1),
         on_trace_ready=trace_handler,
         record_shapes=True,
         profile_memory=True,
