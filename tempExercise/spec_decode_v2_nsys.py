@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.cuda.nvtx as nvtx
 
 from vllm import LLM, SamplingParams
 
@@ -20,6 +21,8 @@ RUN_LOC = "local"  # "server"
 DEBUG = False
 
 os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "1"
+# Enable NVTX markers for vLLM's internal profiling points
+os.environ["VLLM_NVTX_SCOPES_FOR_PROFILING"] = "1"
 # Required for nsys profiling
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 if not DEBUG:
@@ -76,11 +79,17 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
 
 
 def warmup(llm: LLM, prompts: list[str], sampling_params, warmup_iters):
-    print("WARM UP START")
-    assert warmup_iters <= len(prompts)
-    for i in range(warmup_iters):
-        _ = llm.generate(prompts[i], sampling_params)
-    print("WARM UP DONE")
+    with nvtx.range("warmup: start"):
+        print("WARM UP START")
+        assert warmup_iters <= len(prompts)
+
+    with nvtx.range("warmup: iterations"):
+        for i in range(warmup_iters):
+            with nvtx.range(f"warmup: iteration_{i}"):
+                _ = llm.generate(prompts[i], sampling_params)
+
+    with nvtx.range("warmup: done"):
+        print("WARM UP DONE")
 
 
 def print_single_request_metrics(metrics_dict: dict[str, Any]):
@@ -309,21 +318,32 @@ def main():
     all_metrics = []
 
     # Start profiling - this enables profiling in worker processes
-    warmup(llm=llm, prompts=prompts, sampling_params=sampling_params, warmup_iters=2)
+    with nvtx.range("main: warmup"):
+        warmup(
+            llm=llm, prompts=prompts, sampling_params=sampling_params, warmup_iters=2
+        )
 
     # Profile only one request to keep trace size manageable
     # nsys will capture everything from start_profile to stop_profile
-    for i, prompt in enumerate(prompts[:1]):  # Only profile first prompt
-        if i > 0:
-            llm.reset_prefix_cache(reset_running_requests=False)
-        start_time = time.time()
+    with nvtx.range("main: profiling_loop"):
+        for i, prompt in enumerate(prompts[:1]):  # Only profile first prompt
+            with nvtx.range(f"main: request_{i}"):
+                if i > 0:
+                    with nvtx.range("main: reset_cache"):
+                        llm.reset_prefix_cache(reset_running_requests=False)
 
-        # Start CUDA profiler (for nsys)
-        llm.start_profile()
-        outputs = llm.generate(prompt, sampling_params)
-        torch.cuda.synchronize()
-        llm.stop_profile()
-        end_time = time.time()
+                start_time = time.time()
+
+                # Start CUDA profiler (for nsys)
+                llm.start_profile()
+
+                with nvtx.range("main: generation"):
+                    outputs = llm.generate(prompt, sampling_params)
+                    torch.cuda.synchronize()
+
+                llm.stop_profile()
+
+                end_time = time.time()
 
         for output in outputs:
             all_metrics.append(
