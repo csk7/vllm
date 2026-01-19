@@ -539,7 +539,9 @@ class EagleProposer:
                         )
 
                         input_ids = None
-                        inputs_embeds = self.inputs_embeds[:input_batch_size]
+                        inputs_embeds = self.inputs_embeds[
+                            :input_batch_size
+                        ]  # input_batch_size is 5 not 1
                     else:
                         input_ids = self.input_ids[:input_batch_size]
                         inputs_embeds = None

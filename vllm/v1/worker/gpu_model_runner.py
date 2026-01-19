@@ -3773,10 +3773,11 @@ class GPUModelRunner(
                             target_hidden_states = hidden_states[token_indices]
                     else:
                         with record_function(
-                            "Prepare all target outputs until now, Cat hidden states(S)"
+                            "Calculate num reject tokens and where query_loc \
+                                schould actually be, Cat hidden states(S)"
                         ):
                             (
-                                common_attn_metadata,
+                                common_attn_metadata,  # This can reset loc of KV Block
                                 token_indices_to_sample,
                                 num_rejected_tokens_gpu,
                             ) = self.drafter.prepare_inputs_padded(
