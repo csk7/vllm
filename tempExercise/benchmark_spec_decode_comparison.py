@@ -132,16 +132,18 @@ def start_server(
     ]
 
     if use_spec_decode:
+        speculative_config = json.dumps(
+            {
+                "model": DRAFT_MODEL,
+                "method": "eagle3",
+                "num_speculative_tokens": 3,
+                "draft_tensor_parallel_size": 1,
+            }
+        )
         cmd.extend(
             [
-                "--speculative-model",
-                DRAFT_MODEL,
-                "--speculative-draft-tensor-parallel-size",
-                "1",
-                "--num-speculative-tokens",
-                "3",
-                "--speculative-method",
-                "eagle3",
+                "--speculative-config",
+                speculative_config,
             ]
         )
 
