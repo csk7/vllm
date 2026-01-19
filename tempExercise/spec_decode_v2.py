@@ -9,8 +9,8 @@ import torch
 
 from vllm import LLM, SamplingParams
 
-MODE = "profiling"  # "benchmarking"
-RUN_LOC = "local"  # "server"
+MODE = "benchmarking"  # "benchmarking"
+RUN_LOC = "server"  # "server"
 DEBUG = True
 with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]):
     torch.cuda.empty_cache()
@@ -69,7 +69,7 @@ def get_model(model_type: str, enable_profiler: bool = False) -> LLM:
                 "dtype": "bfloat16",
                 "method": "eagle3",
                 "draft_tensor_parallel_size": 1,  # Draft model must use TP=1
-                "num_speculative_tokens": 4,  # Number of speculative tokens
+                "num_speculative_tokens": 3,  # Number of speculative tokens
             },
             profiler_config=profiler_config,
         )
@@ -297,7 +297,7 @@ def main():
 
     sampling_params = SamplingParams(
         temperature=0.0,
-        top_p=0.8,
+        top_p=1.0,
         max_tokens=max_tokens,
     )
 
@@ -325,7 +325,7 @@ def main():
     all_metrics = []
 
     # Start profiling - this enables profiling in worker processes
-    warmup(llm=llm, prompts=prompts, sampling_params=sampling_params, warmup_iters=2)
+    #warmup(llm=llm, prompts=prompts, sampling_params=sampling_params, warmup_iters=2)
 
     for i, prompt in enumerate(prompts):
         if i > 0:
