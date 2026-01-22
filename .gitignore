@@ -234,6 +234,7 @@ tempExercise/log/*
 *.nsys-rep
 *.sqlite
 *.pt.trace.json.gz
+tempExercise/*.md
 
 # Generated gRPC protobuf files (compiled at build time from vllm_engine.proto)
 vllm/grpc/vllm_engine_pb2.py
