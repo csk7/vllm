@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -18,7 +19,7 @@ concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "local"
+RUN_LOC = "server"
 if RUN_LOC == "local":
     MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
@@ -123,6 +124,20 @@ class vllmServer:
             text=True,
         )
 
+        # Start a thread to read and print server output in real-time
+        def read_output():
+            """Read server output and print it."""
+            if self.process and self.process.stdout:
+                try:
+                    for line in iter(self.process.stdout.readline, ''):
+                        if line:
+                            print(f"[vLLM Server] {line.rstrip()}")
+                except Exception:
+                    pass
+        
+        output_thread = threading.Thread(target=read_output, daemon=True)
+        output_thread.start()
+        
         # Wait for server to be ready and get actual model name
         print(f"Waiting for server to be ready... : {cmd}")
         is_ready = self.wait_for_server()
@@ -131,7 +146,31 @@ class vllmServer:
             return self.process
         else:
             print("✗ Server failed to start within timeout")
+            # Check process status
+            return_code = self.process.poll()
+            if return_code is not None:
+                print(f"\nServer process terminated with return code: {return_code}")
+                # Try to read any remaining output
+                try:
+                    remaining_output, _ = self.process.communicate(timeout=2)
+                    if remaining_output:
+                        print("\n--- Remaining Server Output ---")
+                        print(remaining_output)
+                        print("--- End Server Output ---\n")
+                except subprocess.TimeoutExpired:
+                    pass
+            else:
+                print("\nServer process is still running but not responding to HTTP requests.")
+                print("This might indicate:")
+                print("  - Server is still initializing (model loading, etc.)")
+                print("  - Port conflict or network issue")
+                print("  - Server error that prevents HTTP endpoint from starting")
+            
             self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
             raise RuntimeError("Server failed to start")
 
     def stop_server(self):
