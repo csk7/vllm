@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-spec_decode = [True, False]
+spec_decode = [False]
 CUDA_graph_en = [True, False]
 concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
 
@@ -24,7 +24,8 @@ if RUN_LOC == "local":
     MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
-    MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
+    #MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
+    MODEL="Qwen/Qwen3-VL-32B-Instruct-FP8" #Dense Model
     DRAFT_MODEL = "RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3"
 
 # Client Params
@@ -80,7 +81,7 @@ class vllmServer:
             "--port",
             str(port),
             "--dtype",
-            "bfloat16",
+            "auto", #bfloat16
             "--max-model-len",
             "8192",
             "--max-num-seqs",
