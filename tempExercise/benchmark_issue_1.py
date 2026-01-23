@@ -14,18 +14,18 @@ import requests
 
 spec_decode = [False]
 CUDA_graph_en = [True, False]
-concur_num_seq = [(4, [4, 32]), (32, [32, 64])]
+concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
 
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "local"
+RUN_LOC = "server"
 if RUN_LOC == "local":
     MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
-    # MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
-    MODEL = "Qwen/Qwen3-VL-32B-Instruct-FP8"  # Dense Model
+    MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
+    # MODEL = "Qwen/Qwen3-VL-32B-Instruct-FP8"  # Dense Model
     DRAFT_MODEL = "RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3"
 
 # Client Params
