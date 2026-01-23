@@ -14,18 +14,18 @@ import requests
 
 spec_decode = [False]
 CUDA_graph_en = [True, False]
-concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
+concur_num_seq = [(4, [4, 32]), (32, [32, 64])]
 
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "server"
+RUN_LOC = "local"
 if RUN_LOC == "local":
     MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
-    #MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
-    MODEL="Qwen/Qwen3-VL-32B-Instruct-FP8" #Dense Model
+    # MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
+    MODEL = "Qwen/Qwen3-VL-32B-Instruct-FP8"  # Dense Model
     DRAFT_MODEL = "RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3"
 
 # Client Params
@@ -81,7 +81,7 @@ class vllmServer:
             "--port",
             str(port),
             "--dtype",
-            "auto", #bfloat16
+            "bfloat16",
             "--max-model-len",
             "8192",
             "--max-num-seqs",
@@ -91,7 +91,9 @@ class vllmServer:
         ]
 
         if disable_cuda_graphs:
-            cmd.extend(["--enforce-eager"])
+            cmd.extend(["-cc.cudagraph_mode=NONE"])
+        else:
+            cmd.extend(["-cc.cudagraph_mode=FULL_AND_PIECEWISE"])
 
         if use_spec_decode:
             speculative_config = json.dumps(
@@ -130,15 +132,15 @@ class vllmServer:
             """Read server output and print it."""
             if self.process and self.process.stdout:
                 try:
-                    for line in iter(self.process.stdout.readline, ''):
+                    for line in iter(self.process.stdout.readline, ""):
                         if line:
                             print(f"[vLLM Server] {line.rstrip()}")
                 except Exception:
                     pass
-        
+
         output_thread = threading.Thread(target=read_output, daemon=True)
         output_thread.start()
-        
+
         # Wait for server to be ready and get actual model name
         print(f"Waiting for server to be ready... : {cmd}")
         is_ready = self.wait_for_server()
@@ -161,12 +163,15 @@ class vllmServer:
                 except subprocess.TimeoutExpired:
                     pass
             else:
-                print("\nServer process is still running but not responding to HTTP requests.")
+                print(
+                    "\nServer process is still running \
+                        but not responding to HTTP requests."
+                )
                 print("This might indicate:")
                 print("  - Server is still initializing (model loading, etc.)")
                 print("  - Port conflict or network issue")
                 print("  - Server error that prevents HTTP endpoint from starting")
-            
+
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
