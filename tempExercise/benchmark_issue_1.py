@@ -11,11 +11,21 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+import torch
 
 spec_decode = [False]
 CUDA_graph_en = [True, False]
 concur_num_seq = [(4, [4, 32]), (32, [32, 64])]
 
+DEBUG = True
+with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]):
+    torch.cuda.empty_cache()
+
+os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "1"
+if not DEBUG:
+    os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "1"
+else:
+    os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
