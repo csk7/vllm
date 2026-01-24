@@ -14,10 +14,12 @@ import requests
 import torch
 
 spec_decode = [False]
-CUDA_graph_en = [True, False]
-concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
+# CUDA_graph_en = [True, False]
+# concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
+CUDA_graph_en = [False]
+concur_num_seq = [(2, [2, 4])]
 
-DEBUG = True
+DEBUG = False
 with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]):
     torch.cuda.empty_cache()
 
@@ -26,10 +28,14 @@ if not DEBUG:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "1"
 else:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+PROFILE = True
+# Set RPC timeout for profiler (30 minutes) - needed for stop_profile to flush traces
+if PROFILE:
+    os.environ["VLLM_RPC_TIMEOUT"] = "1800000"  # 30 minutes in milliseconds
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "server"
+RUN_LOC = "local"
 if RUN_LOC == "local":
     MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
@@ -118,6 +124,25 @@ class vllmServer:
                 [
                     "--speculative-config",
                     speculative_config,
+                ]
+            )
+        if PROFILE:
+            profiler_dir = os.path.abspath("./log/vllm_profile/serve_1_test/")
+            os.makedirs(profiler_dir, exist_ok=True)
+            profiler_config = json.dumps(
+                {
+                    "profiler": "torch",
+                    "torch_profiler_dir": profiler_dir,
+                    "torch_profiler_with_stack": False,
+                    "torch_profiler_record_shapes": True,
+                    "torch_profiler_with_memory": False,
+                    "torch_profiler_dump_cuda_time_total": True,
+                }
+            )
+            cmd.extend(
+                [
+                    "--profiler-config",
+                    profiler_config,
                 ]
             )
 
@@ -344,12 +369,77 @@ def main():
                         )
 
                         result_file = LOG_DIR / f"{scenario_name}_results.json"
+                        # Start profiling via HTTP API
+                        if PROFILE:
+                            try:
+                                print("Starting profiler...")
+                                response = requests.post(
+                                    f"{BASE_URL}/start_profile", timeout=10
+                                )
+                                if response.status_code == 200:
+                                    print("✓ Profiler started successfully")
+                                else:
+                                    print(
+                                        f"⚠ Warning: Failed to start profiler: \
+                                            HTTP {response.status_code}"
+                                    )
+                                    if response.text:
+                                        print(f"  Response: {response.text}")
+                            except requests.exceptions.Timeout:
+                                print("⚠ Warning: Start profiler request timed out")
+                            except Exception as e:
+                                print(f"⚠ Warning: Could not start profiler: {e}")
+
                         benchmark_results = run_benchmark(
                             scenario_name=scenario_name,
                             use_spec_decode=use_spec_decode,
                             client_max_concurrency=client_max_concurrency,
                             result_file=result_file,
                         )
+
+                        # Stop profiling via HTTP API
+                        # Note: stop_profile can take a long time
+                        # (up to 10+ minutes) to flush traces
+                        if PROFILE:
+                            try:
+                                print(
+                                    "\nStopping profiler (this may take \
+                                        several minutes to flush traces)..."
+                                )
+                                # Use a very long timeout (30 minutes)
+                                # as recommended in vLLM docs
+                                response = requests.post(
+                                    f"{BASE_URL}/stop_profile", timeout=1800
+                                )
+                                if response.status_code == 200:
+                                    print(
+                                        "✓ Profiler stopped and traces \
+                                            flushed successfully"
+                                    )
+                                else:
+                                    print(
+                                        f"⚠ Warning: Failed to stop profiler:\
+                                            HTTP {response.status_code}"
+                                    )
+                                    if response.text:
+                                        print(f"  Response: {response.text}")
+                            except requests.exceptions.Timeout:
+                                print(
+                                    "⚠ Warning: Stop profiler request \
+                                        timed out (traces may still be flushing)"
+                                )
+                                print(
+                                    "  This is normal for large workloads - \
+                                        traces may continue flushing in background"
+                                )
+                            except Exception as e:
+                                print(f"⚠ Warning: Could not stop profiler: {e}")
+                                print(
+                                    "  Traces may still be flushing in the background"
+                                )
+
+                            print("Waiting for profiler to finish writing traces...")
+                            time.sleep(10)  # Give extra time for trace flushing
 
                         server.stop_server()
                         server = None
