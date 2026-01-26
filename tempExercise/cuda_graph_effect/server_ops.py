@@ -53,7 +53,7 @@ class vllmServer:
             "--max-num-seqs",
             str(seq_low_high),
             "--gpu-memory-utilization",
-            "0.95",
+            "0.85",  # Reduced from 0.95 to prevent OOM on 8GB GPUs
         ]
 
         if disable_cuda_graphs:
@@ -85,7 +85,7 @@ class vllmServer:
                     "torch_profiler_dir": profiler_dir,
                     "torch_profiler_with_stack": False,
                     "torch_profiler_record_shapes": True,
-                    "torch_profiler_with_memory": False,
+                    "torch_profiler_with_memory": True,
                     "torch_profiler_dump_cuda_time_total": True,
                 }
             )
@@ -105,11 +105,15 @@ class vllmServer:
         print(f"Command: {' '.join(cmd)}")
         print(f"{'=' * 80}\n")
 
+        # Enable DEBUG logging for vLLM if required
+        env = os.environ.copy()
+
         self.process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            env=env,
         )
 
         # Start a thread to read and print server output in real-time

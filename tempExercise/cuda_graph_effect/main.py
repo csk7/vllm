@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # imports and global info
+import os
 import sys
 import time
 
 import pandas as pd
-import requests
 import torch
 from global_vars import *
 from server_ops import vllmServer
 
-from tools import extract_tpot_metrics, run_benchmark
+from tools import extract_tpot_metrics, run_benchmark, run_benchmark_phased
 
 
 def start_server(
@@ -22,76 +22,25 @@ def start_server(
         seq_low_high=server_max_seqs,
     )
 
-    result_file = LOG_DIR / f"{scenario_name}_results.json"
-    # Start profiling via HTTP API
-    if PROFILE:
-        try:
-            print("Starting profiler...")
-            response = requests.post(f"{BASE_URL}/start_profile", timeout=10)
-            if response.status_code == 200:
-                print("✓ Profiler started successfully")
-            else:
-                print(
-                    f"⚠ Warning: Failed to start profiler: \
-                        HTTP {response.status_code}"
-                )
-                if response.text:
-                    print(f"  Response: {response.text}")
-        except requests.exceptions.Timeout:
-            print("⚠ Warning: Start profiler request timed out")
-        except Exception as e:
-            print(f"⚠ Warning: Could not start profiler: {e}")
-
-    return result_file
-
 
 def benchmark(scenario_name, use_spec_decode, client_max_concurrency, result_file):
-    benchmark_results = run_benchmark(
-        scenario_name=scenario_name,
-        use_spec_decode=use_spec_decode,
-        client_max_concurrency=client_max_concurrency,
-        result_file=result_file,
-    )
-
-    # Stop profiling via HTTP API
-    # Note: stop_profile can take a long time
-    # (up to 10+ minutes) to flush traces
+    """Run benchmark, using phased approach if profiling is enabled."""
     if PROFILE:
-        try:
-            print(
-                "\nStopping profiler (this may take \
-                    several minutes to flush traces)..."
-            )
-            # Use a very long timeout (30 minutes)
-            # as recommended in vLLM docs
-            response = requests.post(f"{BASE_URL}/stop_profile", timeout=1800)
-            if response.status_code == 200:
-                print(
-                    "✓ Profiler stopped and traces \
-                        flushed successfully"
-                )
-            else:
-                print(
-                    f"⚠ Warning: Failed to stop profiler:\
-                        HTTP {response.status_code}"
-                )
-                if response.text:
-                    print(f"  Response: {response.text}")
-        except requests.exceptions.Timeout:
-            print(
-                "⚠ Warning: Stop profiler request \
-                    timed out (traces may still be flushing)"
-            )
-            print(
-                "  This is normal for large workloads - \
-                    traces may continue flushing in background"
-            )
-        except Exception as e:
-            print(f"⚠ Warning: Could not stop profiler: {e}")
-            print("  Traces may still be flushing in the background")
-
-        print("Waiting for profiler to finish writing traces...")
-        time.sleep(10)  # Give extra time for trace flushing
+        # Use phased benchmark to profile only middle 10% of prompts
+        benchmark_results = run_benchmark_phased(
+            scenario_name=scenario_name,
+            use_spec_decode=use_spec_decode,
+            client_max_concurrency=client_max_concurrency,
+            result_file=result_file,
+        )
+    else:
+        # Run normal benchmark without profiling
+        benchmark_results = run_benchmark(
+            scenario_name=scenario_name,
+            use_spec_decode=use_spec_decode,
+            client_max_concurrency=client_max_concurrency,
+            result_file=result_file,
+        )
 
     return benchmark_results
 
@@ -153,10 +102,10 @@ def write_result_json(
 
 def main():
     spec_decode = [False]
-    # CUDA_graph_en = [True, False]
-    # concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
-    CUDA_graph_en = [False, True]
-    concur_num_seq = [(4, [4, 32])]
+    CUDA_graph_disable_flags = [True, False]
+    concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
+    # CUDA_graph_disable_flags = [False, True]
+    # concur_num_seq = [(4, [4])]
 
     """Main benchmark execution."""
     print("=" * 80)
@@ -171,7 +120,7 @@ def main():
 
     # Test all combinations
     for use_spec_decode in spec_decode:
-        for disable_cuda_graphs in CUDA_graph_en:
+        for disable_cuda_graphs in CUDA_graph_disable_flags:
             for scenario in concur_num_seq:
                 client_max_concurrency = scenario[0]
                 seq_low_high_list = scenario[1]
@@ -192,12 +141,12 @@ def main():
 
                         print(f"\n{'#' * 80}")
                         print(
-                            f"Case: Spec={spec_str}, CUDAGraph={cuda_str}, "
+                            f"Case: SD: {spec_str}, CUDAGraph: {cuda_str}, "
                             f"Concur={client_max_concurrency}, \
                                 Max_num_seq={server_max_seqs}"
                         )
                         scenario_name = (
-                            f"Case:_Spec_{spec_str}_CUDAGraph_{cuda_str}_"
+                            f"Case:_SD_{spec_str}_CUDAGraph_{cuda_str}_"
                             f"Concur_{client_max_concurrency}_num_seq_{server_max_seqs}"
                         )
                         print(f"{'#' * 80}")
@@ -205,7 +154,7 @@ def main():
 
                         server = vllmServer()
 
-                        result_file = start_server(
+                        start_server(
                             server,
                             use_spec_decode,
                             disable_cuda_graphs,
@@ -215,10 +164,7 @@ def main():
 
                         # Benchmark
                         benchmark_results = benchmark(
-                            scenario_name,
-                            use_spec_decode,
-                            client_max_concurrency,
-                            result_file,
+                            scenario_name, use_spec_decode, client_max_concurrency
                         )
 
                         # Stop server
@@ -235,18 +181,8 @@ def main():
                         elif seq_high is not None and max_num_seq == seq_high:
                             tpot_high = tpot_value
 
-                        results_data = write_result_json(
-                            results_data,
-                            tpot_low,
-                            tpot_high,
-                            use_spec_decode,
-                            disable_cuda_graphs,
-                            client_max_concurrency,
-                            seq_low,
-                            seq_high,
-                        )
-
                         print(f"Done: {scenario_name} : TPOT = {tpot_value} ms")
+                        print(f"{'=' * 80}")
 
                     except KeyboardInterrupt:
                         print("\n\nBenchmark interrupted by user")
@@ -264,6 +200,16 @@ def main():
                         continue
 
                 # Calculate speedup and improvement if we have both values
+                results_data = write_result_json(
+                    results_data,
+                    tpot_low,
+                    tpot_high,
+                    use_spec_decode,
+                    disable_cuda_graphs,
+                    client_max_concurrency,
+                    seq_low,
+                    seq_high,
+                )
 
     # Create pandas DataFrame
     if results_data:
@@ -286,7 +232,7 @@ def main():
         print("=" * 80)
 
         # Save to CSV
-        csv_file = LOG_DIR / "benchmark_results.csv"
+        csv_file = os.path.join(LOG_DIR, "benchmark_results.csv")
         df.to_csv(csv_file, index=False)
         print(f"\nResults saved to: {csv_file}")
 
