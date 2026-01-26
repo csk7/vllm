@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-DEBUG = True
+DEBUG = False
 PROFILE = True
 
 if not DEBUG:
@@ -22,8 +22,8 @@ PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
 RUN_LOC = "local"
 if RUN_LOC == "local":
-    MODEL = "Qwen/Qwen3-0.6B"
-    # MODEL = "meta-llama/Llama-3.2-1B-Instruct"
+    # MODEL = "Qwen/Qwen3-0.6B"
+    MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
     MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model

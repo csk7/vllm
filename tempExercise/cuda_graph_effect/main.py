@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # imports and global info
-import os
 import sys
 import time
 
@@ -10,7 +9,7 @@ import torch
 from global_vars import *
 from server_ops import vllmServer
 
-from tools import extract_tpot_metrics, run_benchmark, run_benchmark_phased
+from tools import extract_tpot_metrics, run_benchmark, run_profiling_only
 
 
 def start_server(
@@ -23,23 +22,36 @@ def start_server(
     )
 
 
-def benchmark(scenario_name, use_spec_decode, client_max_concurrency, result_file):
-    """Run benchmark, using phased approach if profiling is enabled."""
+def benchmark(scenario_name, use_spec_decode, client_max_concurrency):
+    """Run benchmark, with optional separate profiling run.
+
+    Always runs the full benchmark first for accurate results.
+    If profiling is enabled, runs a separate 10% profiling run afterward
+    (TPOT printed but not included in results).
+    """
+    # Always run the main benchmark first
+    result_file = LOG_DIR / f"{scenario_name}_results.json"
+    benchmark_results = run_benchmark(
+        scenario_name=scenario_name,
+        use_spec_decode=use_spec_decode,
+        client_max_concurrency=client_max_concurrency,
+        result_file=result_file,
+    )
+
+    # Clean up result file
+    try:
+        if result_file.exists():
+            result_file.unlink()
+            print(f"Deleted temporary file: {result_file}")
+    except Exception as e:
+        print(f"Warning: Could not delete {result_file}: {e}")
+
+    # If profiling is enabled, run separate profiling run
     if PROFILE:
-        # Use phased benchmark to profile only middle 10% of prompts
-        benchmark_results = run_benchmark_phased(
+        run_profiling_only(
             scenario_name=scenario_name,
             use_spec_decode=use_spec_decode,
             client_max_concurrency=client_max_concurrency,
-            result_file=result_file,
-        )
-    else:
-        # Run normal benchmark without profiling
-        benchmark_results = run_benchmark(
-            scenario_name=scenario_name,
-            use_spec_decode=use_spec_decode,
-            client_max_concurrency=client_max_concurrency,
-            result_file=result_file,
         )
 
     return benchmark_results
@@ -102,10 +114,10 @@ def write_result_json(
 
 def main():
     spec_decode = [False]
-    CUDA_graph_disable_flags = [True, False]
-    concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
-    # CUDA_graph_disable_flags = [False, True]
-    # concur_num_seq = [(4, [4])]
+    # CUDA_graph_disable_flags = [True, False]
+    # concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
+    CUDA_graph_disable_flags = [False, True]
+    concur_num_seq = [(4, [4])]
 
     """Main benchmark execution."""
     print("=" * 80)
@@ -232,7 +244,7 @@ def main():
         print("=" * 80)
 
         # Save to CSV
-        csv_file = os.path.join(LOG_DIR, "benchmark_results.csv")
+        csv_file = LOG_DIR / "benchmark_results.csv"
         df.to_csv(csv_file, index=False)
         print(f"\nResults saved to: {csv_file}")
 

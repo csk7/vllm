@@ -85,7 +85,7 @@ class vllmServer:
                     "torch_profiler_dir": profiler_dir,
                     "torch_profiler_with_stack": False,
                     "torch_profiler_record_shapes": True,
-                    "torch_profiler_with_memory": True,
+                    "torch_profiler_with_memory": False,
                     "torch_profiler_dump_cuda_time_total": True,
                 }
             )

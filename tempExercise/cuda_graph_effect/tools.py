@@ -116,58 +116,27 @@ def extract_tpot_metrics(results: dict) -> dict[str, float]:
     return metrics
 
 
-def run_benchmark_phased(
+def run_profiling_only(
     scenario_name: str,
     use_spec_decode: bool,
     client_max_concurrency: int,
-) -> dict:
-    """Run benchmark in three phases: before profiling,
-    during profiling, after profiling.
+) -> None:
+    """Run a separate profiling run with 10% of prompts.
 
-    Only the middle phase (10% of prompts) will be profiled to reduce trace file size.
+    The profiling run's TPOT is printed but NOT included in final results.
+    This is called after the main benchmark to collect profiling traces
+    without affecting benchmark accuracy.
     """
     import requests
 
     total_prompts = NUM_PROMPTS
     profile_count = int(total_prompts * PROFILE_PERCENTAGE)
-    phase1_count = (total_prompts - profile_count) // 2
-    phase2_count = profile_count
-    phase3_count = total_prompts - phase1_count - phase2_count
 
     print(f"\n{'=' * 80}")
-    print(f"Running phased benchmark: {scenario_name}")
-    print(f"Total prompts: {total_prompts}")
-    print(f"Phase 1 (no profiling): {phase1_count} prompts")
-    print(f"Phase 2 (WITH profiling): {phase2_count} prompts")
-    print(f"Phase 3 (no profiling): {phase3_count} prompts")
+    print(f"[Profiling Run] Starting profiler and running {profile_count} prompts...")
+    print("NOTE: Profiling TPOT will be printed but NOT included in final results.")
     print(f"{'=' * 80}\n")
 
-    all_results = []
-
-    # Phase 1: Run first portion without profiling
-    print(f"\n[Phase 1] Running {phase1_count} prompts without profiling...")
-    phase1_file = os.path.join(LOG_DIR, f"{scenario_name}_phase1_results.json")
-    phase1_results = run_benchmark(
-        scenario_name=f"{scenario_name}_phase1",
-        use_spec_decode=use_spec_decode,
-        client_max_concurrency=client_max_concurrency,
-        result_file=phase1_file,
-        num_prompts=phase1_count,
-        num_warmups=WARMUP_REQUESTS,  # Only warmup in phase 1
-    )
-    if phase1_results:
-        all_results.append(phase1_results)
-
-    # Delete phase1 file after use
-    try:
-        if os.path.exists(phase1_file):
-            os.remove(phase1_file)
-            print(f"Deleted temporary file: {phase1_file}")
-    except Exception as e:
-        print(f"Warning: Could not delete {phase1_file}: {e}")
-
-    # Phase 2: Start profiling, run middle portion, stop profiling
-    print(f"\n[Phase 2] Starting profiler and running {phase2_count} prompts...")
     try:
         print("Starting profiler...")
         response = requests.post(f"{BASE_URL}/start_profile", timeout=10)
@@ -178,25 +147,37 @@ def run_benchmark_phased(
     except Exception as e:
         print(f"⚠ Warning: Could not start profiler: {e}")
 
-    phase2_file = os.path.join(LOG_DIR, f"{scenario_name}_phase2_results.json")
-    phase2_results = run_benchmark(
-        scenario_name=f"{scenario_name}_phase2",
+    profile_file = LOG_DIR / f"{scenario_name}_profile_results.json"
+    profile_results = run_benchmark(
+        scenario_name=f"{scenario_name}_profile",
         use_spec_decode=use_spec_decode,
         client_max_concurrency=client_max_concurrency,
-        result_file=phase2_file,
-        num_prompts=phase2_count,
-        num_warmups=0,  # No warmup in middle phase
+        result_file=profile_file,
+        num_prompts=profile_count,
+        num_warmups=WARMUP_REQUESTS,  # Use same warmup as
+        # main benchmark for consistency
     )
-    if phase2_results:
-        all_results.append(phase2_results)
 
-    # Delete phase2 file after use
+    # Print profiling TPOT but don't include in final results
+    if profile_results:
+        profile_metrics = extract_tpot_metrics(profile_results)
+        profile_tpot = profile_metrics.get("mean_tpot_ms")
+        if profile_tpot is not None:
+            print(f"\n{'=' * 80}")
+            print(f"Profiling Run TPOT: {profile_tpot:.2f} ms")
+            print("(This value is NOT included in final benchmark results)")
+            print(
+                "NOTE: Profiling overhead may cause this to be higher than actual TPOT"
+            )
+            print(f"{'=' * 80}\n")
+
+    # Delete profile file after use
     try:
-        if os.path.exists(phase2_file):
-            os.remove(phase2_file)
-            print(f"Deleted temporary file: {phase2_file}")
+        if profile_file.exists():
+            profile_file.unlink()
+            print(f"Deleted temporary file: {profile_file}")
     except Exception as e:
-        print(f"Warning: Could not delete {phase2_file}: {e}")
+        print(f"Warning: Could not delete {profile_file}: {e}")
 
     # Stop profiling
     try:
@@ -220,37 +201,6 @@ def run_benchmark_phased(
 
     print("Waiting for profiler to finish writing traces...")
     time.sleep(10)  # Give extra time for trace flushing
-
-    # Phase 3: Run remaining portion without profiling
-    print(f"\n[Phase 3] Running {phase3_count} prompts without profiling...")
-    phase3_file = os.path.join(LOG_DIR, f"{scenario_name}_phase3_results.json")
-    phase3_results = run_benchmark(
-        scenario_name=f"{scenario_name}_phase3",
-        use_spec_decode=use_spec_decode,
-        client_max_concurrency=client_max_concurrency,
-        result_file=phase3_file,
-        num_prompts=phase3_count,
-        num_warmups=0,  # No warmup in final phase
-    )
-    if phase3_results:
-        all_results.append(phase3_results)
-
-    # Delete phase3 file after use
-    try:
-        if os.path.exists(phase3_file):
-            os.remove(phase3_file)
-            print(f"Deleted temporary file: {phase3_file}")
-    except Exception as e:
-        print(f"Warning: Could not delete {phase3_file}: {e}")
-
-    # Combine results
-    print(f"\n{'=' * 80}")
-    print("Combining results from all phases...")
-    print(f"{'=' * 80}\n")
-
-    combined_results = combine_benchmark_results(all_results, total_prompts)
-
-    return combined_results
 
 
 def combine_benchmark_results(results_list: list[dict], total_prompts: int) -> dict:
