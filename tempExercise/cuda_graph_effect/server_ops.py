@@ -33,6 +33,7 @@ class vllmServer:
         use_spec_decode: bool,
         disable_cuda_graphs: bool,
         seq_low_high: int,
+        scenario_name: str = None,
         port: int = PORT,
     ):
         """Start vLLM server with specified configuration.
@@ -79,16 +80,28 @@ class vllmServer:
         if PROFILE:
             profiler_dir = os.path.abspath("./log/vllm_profile/serve_1_test/")
             os.makedirs(profiler_dir, exist_ok=True)
-            profiler_config = json.dumps(
-                {
-                    "profiler": "torch",
-                    "torch_profiler_dir": profiler_dir,
-                    "torch_profiler_with_stack": False,
-                    "torch_profiler_record_shapes": True,
-                    "torch_profiler_with_memory": False,
-                    "torch_profiler_dump_cuda_time_total": True,
-                }
-            )
+
+            if NSYS_PROFILE:
+                # Use CUDA profiler for nsys profiling
+                profiler_config = json.dumps(
+                    {
+                        "profiler": "cuda",
+                    }
+                )
+            else:
+                # Use torch profiler
+                profiler_config = json.dumps(
+                    {
+                        "profiler": "torch",
+                        "torch_profiler_dir": profiler_dir,
+                        "torch_profiler_with_stack": False,
+                        "torch_profiler_record_shapes": True,
+                        "torch_profiler_with_memory": False,
+                        "torch_profiler_dump_cuda_time_total": False,
+                        "torch_profiler_use_gzip": True,
+                    }
+                )
+
             cmd.extend(
                 [
                     "--profiler-config",
@@ -96,9 +109,46 @@ class vllmServer:
                 ]
             )
 
+            # Wrap command with nsys profile if NSYS_PROFILE is enabled
+            if NSYS_PROFILE:
+                # Use scenario_name to make output file unique,
+                # or use timestamp if not provided
+                if scenario_name:
+                    # Sanitize scenario_name for filename
+                    # (replace spaces and special chars)
+                    safe_name = (
+                        scenario_name.replace(" ", "_")
+                        .replace("/", "_")
+                        .replace(":", "_")
+                    )
+                    nsys_filename = f"nsys_profile_{safe_name}"
+                else:
+                    import time
+
+                    nsys_filename = f"nsys_profile_{int(time.time())}"
+
+                nsys_output_path = os.path.join(profiler_dir, nsys_filename)
+                nsys_cmd = [
+                    "nsys",
+                    "profile",
+                    "--trace-fork-before-exec=true",
+                    "--cuda-graph-trace=node",
+                    "--capture-range=cudaProfilerApi",
+                    "--capture-range-end=repeat",
+                    "--output",
+                    nsys_output_path,
+                    "--force-overwrite=true",
+                ]
+                cmd = nsys_cmd + cmd
+                print(
+                    f"nsys profiling enabled. Output will \
+                        be saved to: {nsys_output_path}.nsys-rep"
+                )
+
         print(f"\n{'=' * 80}")
         print(
-            f"Starting Server with Config : {'Spec' if use_spec_decode else 'No Spec'},\
+            f"Starting Server with Config \
+            : {'Spec' if use_spec_decode else 'No Spec'},\
             {'CUDAGraph' if not disable_cuda_graphs else 'No CUDAGraph'}, SeqLowHigh \
             {seq_low_high}"
         )

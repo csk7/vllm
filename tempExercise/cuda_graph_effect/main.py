@@ -19,6 +19,7 @@ def start_server(
         use_spec_decode=use_spec_decode,
         disable_cuda_graphs=disable_cuda_graphs,
         seq_low_high=server_max_seqs,
+        scenario_name=scenario_name,
     )
 
 

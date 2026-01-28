@@ -16,6 +16,7 @@ def run_benchmark(
     result_file: Path,
     num_prompts: int = None,
     num_warmups: int = None,
+    use_profile_flag: bool = False,
 ) -> dict:
     """Run benchmark and return results.
 
@@ -70,6 +71,9 @@ def run_benchmark(
         "--metric-percentiles",
         "90",
     ]
+
+    if use_profile_flag:
+        cmd.append("--profile")
 
     print(f"\n{'=' * 80}")
     print(f"Running benchmark: {scenario_name} - {config_type}")
@@ -126,26 +130,31 @@ def run_profiling_only(
     The profiling run's TPOT is printed but NOT included in final results.
     This is called after the main benchmark to collect profiling traces
     without affecting benchmark accuracy.
-    """
-    import requests
 
+    Uses the built-in --profile flag which handles profiling timing correctly
+    (starts after warmup, stops after benchmark).
+    """
     total_prompts = NUM_PROMPTS
     profile_count = int(total_prompts * PROFILE_PERCENTAGE)
 
+    profiler_type = "nsys" if NSYS_PROFILE else "torch"
     print(f"\n{'=' * 80}")
-    print(f"[Profiling Run] Starting profiler and running {profile_count} prompts...")
-    print("NOTE: Profiling TPOT will be printed but NOT included in final results.")
+    print(
+        f"[Profiling Run] Running {profile_count} \
+            prompts with {profiler_type} profiling..."
+    )
+    print(
+        "NOTE: Profiling TPOT will be printed \
+        but NOT included in final results."
+    )
+    if NSYS_PROFILE:
+        print("Using nsys profiling (lower overhead, ~5-20% vs torch ~30-60%).")
+    else:
+        print(
+            "Using built-in --profile flag with torch \
+                profiler (profiling starts after warmup)."
+        )
     print(f"{'=' * 80}\n")
-
-    try:
-        print("Starting profiler...")
-        response = requests.post(f"{BASE_URL}/start_profile", timeout=10)
-        if response.status_code == 200:
-            print("✓ Profiler started successfully")
-        else:
-            print(f"⚠ Warning: Failed to start profiler: HTTP {response.status_code}")
-    except Exception as e:
-        print(f"⚠ Warning: Could not start profiler: {e}")
 
     profile_file = LOG_DIR / f"{scenario_name}_profile_results.json"
     profile_results = run_benchmark(
@@ -154,8 +163,9 @@ def run_profiling_only(
         client_max_concurrency=client_max_concurrency,
         result_file=profile_file,
         num_prompts=profile_count,
-        num_warmups=WARMUP_REQUESTS,  # Use same warmup as
-        # main benchmark for consistency
+        num_warmups=WARMUP_REQUESTS,  # Warmup needed for stable profiling results
+        use_profile_flag=True,  # Use built-in --profile
+        # flag instead of manual HTTP calls
     )
 
     # Print profiling TPOT but don't include in final results
@@ -163,12 +173,22 @@ def run_profiling_only(
         profile_metrics = extract_tpot_metrics(profile_results)
         profile_tpot = profile_metrics.get("mean_tpot_ms")
         if profile_tpot is not None:
+            profiler_type = "nsys" if NSYS_PROFILE else "torch"
+            overhead_range = "5-20%" if NSYS_PROFILE else "30-60%"
             print(f"\n{'=' * 80}")
-            print(f"Profiling Run TPOT: {profile_tpot:.2f} ms")
+            print(f"Profiling Run TPOT ({profiler_type}): {profile_tpot:.2f} ms")
             print("(This value is NOT included in final benchmark results)")
             print(
-                "NOTE: Profiling overhead may cause this to be higher than actual TPOT"
+                f"WARNING: Profiling adds overhead (typically {overhead_range}). "
+                "Profiling TPOT will always be higher than actual TPOT."
             )
+            if NSYS_PROFILE:
+                print("nsys profiling has lower overhead than torch profiler.")
+            else:
+                print(
+                    "This is expected behavior - profiling \
+                        instrumentation slows down inference."
+                )
             print(f"{'=' * 80}\n")
 
     # Delete profile file after use
@@ -179,93 +199,24 @@ def run_profiling_only(
     except Exception as e:
         print(f"Warning: Could not delete {profile_file}: {e}")
 
-    # Stop profiling
-    try:
-        print("\nStopping profiler (this may take several minutes to flush traces)...")
-        response = requests.post(f"{BASE_URL}/stop_profile", timeout=1800)
-        if response.status_code == 200:
-            print("✓ Profiler stopped and traces flushed successfully")
-        else:
-            print(f"⚠ Warning: Failed to stop profiler: HTTP {response.status_code}")
-    except requests.exceptions.Timeout:
+    # Note: When using --profile flag,
+    #  profiling is automatically stopped after benchmark
+    # The profiler will flush traces in the background
+    profiler_type = "nsys" if NSYS_PROFILE else "torch"
+    print(f"\n{profiler_type.capitalize()} profiling completed.")
+    if NSYS_PROFILE:
+        # The actual filename includes scenario_name, but we show the base path here
         print(
-            "⚠ Warning: Stop profiler request timed out (traces may still be flushing)"
+            "nsys profile saved to: ./log/vllm_profile/serve_1_test/\
+                nsys_profile_<scenario>.nsys-rep"
         )
         print(
-            "  This is normal for large workloads - \
-                traces may continue flushing in background"
+            "View with: nsys-ui ./log/vllm_profile/serve_1_test/\
+                nsys_profile_<scenario>.nsys-rep"
         )
-    except Exception as e:
-        print(f"⚠ Warning: Could not stop profiler: {e}")
-        print("  Traces may still be flushing in the background")
-
-    print("Waiting for profiler to finish writing traces...")
-    time.sleep(10)  # Give extra time for trace flushing
-
-
-def combine_benchmark_results(results_list: list[dict], total_prompts: int) -> dict:
-    """Combine results from multiple benchmark phases into a single result."""
-    if not results_list:
-        return {}
-
-    # Extract all TPOT values for percentile calculation
-    all_tpot_values = []
-    total_successful = 0
-    total_failed = 0
-    weighted_tpot_sum = 0.0
-    total_weight = 0
-
-    for result in results_list:
-        if not result:
-            continue
-
-        # Get number of prompts in this phase
-        phase_prompts = result.get("num_prompts", 0)
-        if phase_prompts == 0:
-            # Try to infer from successful requests
-            phase_prompts = result.get("successful_requests", 0)
-
-        successful = result.get("successful_requests", 0)
-        failed = result.get("failed_requests", 0)
-        total_successful += successful
-        total_failed += failed
-
-        # Get TPOT values
-        mean_tpot = result.get("mean_tpot_ms")
-        if mean_tpot is not None and phase_prompts > 0:
-            weighted_tpot_sum += mean_tpot * phase_prompts
-            total_weight += phase_prompts
-        else:
-            print("Something wrong")
-
-        # Collect individual TPOT values if available
-        if "tpot_ms" in result:
-            all_tpot_values.extend(result["tpot_ms"])
-
-    # Calculate combined metrics
-    combined = {}
-
-    if total_weight > 0:
-        combined["mean_tpot_ms"] = weighted_tpot_sum / total_weight
-
-    # Calculate percentiles if we have individual values
-    if all_tpot_values:
-        all_tpot_values.sort()
-        n = len(all_tpot_values)
-        if n > 0:
-            # P90
-            p90_idx = int(0.9 * n)
-            if p90_idx >= n:
-                p90_idx = n - 1
-            combined["p90_tpot_ms"] = all_tpot_values[p90_idx]
-
-            # Median
-            median_idx = n // 2
-            combined["median_tpot_ms"] = all_tpot_values[median_idx]
-
-    # Add request counts
-    combined["num_requests"] = total_prompts
-    combined["successful_requests"] = total_successful
-    combined["failed_requests"] = total_failed
-
-    return combined
+    else:
+        print("Traces are being flushed in the background...")
+        print(
+            "(This may take several minutes - traces continue flushing after benchmark)"
+        )
+        time.sleep(5)  # Brief wait for initial trace flushing

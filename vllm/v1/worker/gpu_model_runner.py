@@ -3297,19 +3297,19 @@ class GPUModelRunner(
                 ubatch_slices=ubatch_slices_padded,
                 skip_compiled=has_encoder_input,
             ),
-            record_function_or_nullcontext("gpu_model_runner: forward"),
+            record_function_or_nullcontext(
+                f"gpu_model_runner: Target \
+                forward {phase_marker}"
+            ),
             self.maybe_get_kv_connector_output(scheduler_output) as kv_connector_output,
         ):
-            from torch.autograd.profiler import record_function
-
-            with record_function(f"Target Model FW Pass : {phase_marker}"):
-                model_output = self._model_forward(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                    **model_kwargs,
-                )
+            model_output = self._model_forward(
+                input_ids=input_ids,
+                positions=positions,
+                intermediate_tensors=intermediate_tensors,
+                inputs_embeds=inputs_embeds,
+                **model_kwargs,
+            )
 
         with record_function_or_nullcontext("gpu_model_runner: postprocess"):
             if self.use_aux_hidden_state_outputs:

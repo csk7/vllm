@@ -5,16 +5,32 @@ from pathlib import Path
 
 DEBUG = False
 PROFILE = True
+NSYS_PROFILE = True  # Enable nsys profiling (requires PROFILE=True)
+
+# Validation: NSYS_PROFILE requires PROFILE to be True
+if NSYS_PROFILE and not PROFILE:
+    raise ValueError("NSYS_PROFILE requires PROFILE to be True")
 
 if not DEBUG:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "1"
-    os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "1"
+    # Enable custom scopes for profiling (torch profiler)
+
 else:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
-PROFILE_PERCENTAGE = 0.1  # Profile 10% of prompts in the middle of benchmark
+PROFILE_PERCENTAGE = 0.2  # Profile 10% of prompts in the middle of benchmark
 if PROFILE:
     os.environ["VLLM_RPC_TIMEOUT"] = "1800000"  # 30 minutes in milliseconds
+    # For nsys profiling, we use NVTX scopes instead
+    if not NSYS_PROFILE:
+        os.environ["VLLM_CUSTOM_SCOPES_FOR_PROFILING"] = "1"
+    else:
+        # Enable NVTX scopes for nsys profiling (lower overhead, better for nsys)
+        os.environ["VLLM_NVTX_SCOPES_FOR_PROFILING"] = "1"
+
+# nsys profiling requires spawn method for multiprocessing
+if PROFILE and NSYS_PROFILE:
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
 # Server Params
@@ -22,8 +38,8 @@ PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
 RUN_LOC = "local"
 if RUN_LOC == "local":
-    # MODEL = "Qwen/Qwen3-0.6B"
-    MODEL = "meta-llama/Llama-3.2-1B-Instruct"
+    MODEL = "Qwen/Qwen3-0.6B"
+    # MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
     MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
