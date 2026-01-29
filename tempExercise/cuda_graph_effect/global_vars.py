@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 DEBUG = False
-PROFILE = True
+PROFILE = False
 
 if not DEBUG:
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "1"
@@ -20,13 +20,14 @@ if PROFILE:
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "local"
+RUN_LOC = "server"
 if RUN_LOC == "local":
     # MODEL = "Qwen/Qwen3-0.6B"
     MODEL = "meta-llama/Llama-3.2-1B-Instruct"
     DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
-    MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
+    #MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
+    MODEL = "RedHatAI/Mixtral-8x7B-Instruct-v0.1-FP8" # 30B MoE model
     # MODEL = "Qwen/Qwen3-VL-32B-Instruct-FP8"  # Dense Model
     DRAFT_MODEL = "RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3"
 
