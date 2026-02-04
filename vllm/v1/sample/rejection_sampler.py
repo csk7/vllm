@@ -145,7 +145,7 @@ class RejectionSampler(nn.Module):
                 metadata.max_spec_len,
                 metadata.cu_num_draft_tokens,
                 draft_probs,
-                target_probs,
+                target_logits,
                 bonus_token_ids,
                 sampling_metadata,
             )
