@@ -50,11 +50,12 @@ class vllmServer:
             "--dtype",
             "bfloat16",
             "--max-model-len",
-            "8192",
+            "256",  # "8192",
             "--max-num-seqs",
             str(seq_low_high),
             "--gpu-memory-utilization",
-            "0.85",  # Reduced from 0.95 to prevent OOM on 8GB GPUs
+            "0.85",  # 0.95 causes OOM on 8GB GPUs
+            # (vLLM pre-allocates KV cache to fill this %)
         ]
 
         if disable_cuda_graphs:

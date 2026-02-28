@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 
 DEBUG = False
-PROFILE = True
-NSYS_PROFILE = True  # Enable nsys profiling (requires PROFILE=True)
+PROFILE = False
+NSYS_PROFILE = False  # Enable nsys profiling (requires PROFILE=True)
 
 # Validation: NSYS_PROFILE requires PROFILE to be True
 if NSYS_PROFILE and not PROFILE:
@@ -36,11 +36,12 @@ if PROFILE and NSYS_PROFILE:
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "server"
+RUN_LOC = "local"
 if RUN_LOC == "local":
+    # MODEL = "microsoft/Phi-tiny-MoE-instruct"
     MODEL = "Qwen/Qwen3-0.6B"
     # MODEL = "meta-llama/Llama-3.2-1B-Instruct"
-    DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
+    # DRAFT_MODEL = "nm-testing/Llama3_2_1B_speculator.eagle3"
 elif RUN_LOC == "server":
     # MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"  # 30B MoE model
     MODEL = "RedHatAI/Mixtral-8x7B-Instruct-v0.1-FP8"  # 30B MoE model

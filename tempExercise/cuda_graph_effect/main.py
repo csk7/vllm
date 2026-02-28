@@ -116,16 +116,16 @@ def write_result_json(
 def main():
     spec_decode = [False]
     # CUDA_graph_disable_flags = [True, False]
-    # concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
+    concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
     CUDA_graph_disable_flags = [False, True]
-    concur_num_seq = [(4, [4])]
+    # concur_num_seq = [(1, [1])]
 
     """Main benchmark execution."""
     print("=" * 80)
     print("Vanilla vs Speculative Decoding Benchmark")
     print("=" * 80)
     print(f"Model: {MODEL}")
-    print(f"Draft Model: {DRAFT_MODEL}")
+    # print(f"Draft Model: {DRAFT_MODEL}")
     print("=" * 80)
 
     # Store results for DataFrame
