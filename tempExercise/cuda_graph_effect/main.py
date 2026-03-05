@@ -114,7 +114,7 @@ def write_result_json(
 
 
 def main():
-    spec_decode = [False]
+    spec_decode = [False, True]
     # CUDA_graph_disable_flags = [True, False]
     concur_num_seq = [(4, [4, 32]), (32, [32, 128])]
     CUDA_graph_disable_flags = [False, True]

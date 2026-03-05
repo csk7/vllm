@@ -36,7 +36,7 @@ if PROFILE and NSYS_PROFILE:
 # Server Params
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}"
-RUN_LOC = "local"
+RUN_LOC = "server"
 if RUN_LOC == "local":
     # MODEL = "microsoft/Phi-tiny-MoE-instruct"
     MODEL = "Qwen/Qwen3-0.6B"
