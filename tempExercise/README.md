@@ -76,12 +76,37 @@ For each model, CUDA Graph speedup is computed as:
 - MoE model (`Qwen/Qwen3-30B-A3B-Instruct-2507`): `6.09x`
 - Dense model (`Qwen/Qwen3-VL-32B-Instruct-FP8`): `1.94x`
 
+## Profiling results (images)
+
+Profiling screenshots are grouped by filename prefix:
+- `no_cuda*`: CUDA Graph disabled
+- `cuda*`: CUDA Graph enabled
+
+### No CUDA Graph
+
+![No CUDA Graph - CPU and GPU](./cuda_graph_effect/images_profile/no_cuda_graph_cpu_gpu.png)
+Caption: CPU-side launch/scheduling overhead is more visible, with larger gaps before GPU work.
+![No CUDA Graph - GPU ops](./cuda_graph_effect/images_profile/no_cuda_gpu_ops.png)
+Caption: GPU timeline shows many smaller kernel launches instead of compact replay segments.
+
+
+### CUDA Graph enabled
+
+![CUDA Graph - CPU and GPU](./cuda_graph_effect/images_profile/cuda_cpu_gpu.png)
+Caption: CPU involvement is reduced; launch path is shorter and more stable due to graph replay.
+![CUDA Graph - GPU 2](./cuda_graph_effect/images_profile/cuda_gpu_2.png)
+Caption: GPU execution appears denser and more regular, indicating lower per-step launch overhead.
+![CUDA Graph - GPU](./cuda_graph_effect/images_profile/cuda_gpu.png)
+Caption: Repeated decode steps are more uniform, consistent with improved TPOT under CUDA Graph.
+
+
+
 ## Key takeaways
 
-- CUDA Graph enabled gives a strong absolute TPOT reduction versus disabled in most rows.
-- For the 30B model, TPOT with CUDA Graph enabled is around 5-8 ms, while disabled is much higher (about 28-56 ms depending on config), corresponding to about `6.09x` speedup at SeqsHigh.
-- Changing `max-num-seqs` (`SeqsLow -> SeqsHigh`) does not have a single universal trend; impact depends on concurrency/model/config.
-- For the Qwen3-VL-32B runs (dense model), CUDA Graph remains better in absolute TPOT, with an SeqsHigh speedup of `1.94x`; `max-num-seqs` scaling effects are smaller and mixed.
+- CUDA Graph enabled reduces TPOT across these experiments, but the gain differs by model architecture and runtime bottleneck.
+- For the MoE model (`Qwen/Qwen3-30B-A3B-Instruct-2507`), many small kernels finish quickly on GPU, so decode becomes more sensitive to CPU launch/scheduling overhead; CUDA Graph removes much of that overhead, giving a larger SeqsHigh speedup (`6.09x`).
+- For the dense model (`Qwen/Qwen3-VL-32B-Instruct-FP8`), execution is relatively more GPU-bound than CPU-launch-bound, so CUDA Graph still helps but with a smaller SeqsHigh speedup (`1.94x`).
+- These speedup values are not universal; they depend on model size/architecture, GPU type, and runtime settings (concurrency, `max-num-seqs`, and workload shape).
 
 ## Repro notes
 
